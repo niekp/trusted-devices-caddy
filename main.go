@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	caddy.RegisterModule(Middleware{})
+	caddy.RegisterModule((*Middleware)(nil))
 	httpcaddyfile.RegisterHandlerDirective("trusted_devices", parseCaddyfile)
 }
 
@@ -42,7 +42,7 @@ type Middleware struct {
 }
 
 // CaddyModule returns the Caddy module information.
-func (Middleware) CaddyModule() caddy.ModuleInfo {
+func (*Middleware) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.trusted_devices",
 		New: func() caddy.Module { return new(Middleware) },
@@ -88,6 +88,20 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		json.Unmarshal(data, &m.tokens)
 	}
 
+	return nil
+}
+
+// Validate validates that the module has a usable config.
+func (m *Middleware) Validate() error {
+	if m.TrustedIPsFile == "" {
+		return fmt.Errorf("trusted_ips_file cannot be empty")
+	}
+	if m.TrustedTokensFile == "" {
+		return fmt.Errorf("trusted_tokens_file cannot be empty")
+	}
+	if m.maxAge <= 0 {
+		return fmt.Errorf("max_age must be positive")
+	}
 	return nil
 }
 
@@ -200,6 +214,7 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 // Interface guards
 var (
 	_ caddy.Provisioner           = (*Middleware)(nil)
+	_ caddy.Validator             = (*Middleware)(nil)
 	_ caddyhttp.MiddlewareHandler = (*Middleware)(nil)
 	_ caddyfile.Unmarshaler       = (*Middleware)(nil)
 )
