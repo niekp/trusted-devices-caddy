@@ -22,15 +22,15 @@ func init() {
 
 // Middleware implements an HTTP middleware that enforces trusted devices.
 type Middleware struct {
-	TrustedIPsFile     string `json:"trusted_ips_file,omitempty"`
-	TrustedTokensFile  string `json:"trusted_tokens_file,omitempty"`
-	CookieName         string `json:"cookie_name,omitempty"`
-	MaxAge             string `json:"max_age,omitempty"`
+	TrustedIPsFile    string `json:"trusted_ips_file,omitempty"`
+	TrustedTokensFile string `json:"trusted_tokens_file,omitempty"`
+	CookieName        string `json:"cookie_name,omitempty"`
+	MaxAge            string `json:"max_age,omitempty"`
 
-	trustedIPs   map[string]bool
-	tokens       map[string]time.Time
-	maxAge       time.Duration
-	mu           sync.RWMutex
+	trustedIPs map[string]bool
+	tokens     map[string]time.Time
+	maxAge     time.Duration
+	mu         sync.RWMutex
 }
 
 // CaddyModule returns the Caddy module information.
