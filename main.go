@@ -12,12 +12,20 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/google/uuid"
 )
 
 func init() {
 	caddy.RegisterModule(Middleware{})
+	httpcaddyfile.RegisterHandlerDirective("trusted_devices", parseCaddyfile)
+}
+
+func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	var m Middleware
+	err := m.UnmarshalCaddyfile(h.Dispenser)
+	return &m, err
 }
 
 // Middleware implements an HTTP middleware that enforces trusted devices.

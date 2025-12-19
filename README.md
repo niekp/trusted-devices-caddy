@@ -80,6 +80,33 @@ example.com {
 }
 ```
 
+### Reusing Configuration Across Sites
+
+You can define the `trusted_devices` configuration in a snippet and import it into multiple sites:
+
+```
+(trusted_devices_config) {
+    trusted_devices {
+        trusted_ips_file "/etc/caddy/trusted_ips.txt"
+        trusted_tokens_file "/etc/caddy/trusted_tokens.json"
+        cookie_name "trusted_device"
+        max_age "8760h"
+    }
+}
+
+site1.com {
+    import trusted_devices_config
+    reverse_proxy localhost:8080
+}
+
+site2.com {
+    import trusted_devices_config
+    reverse_proxy localhost:8081
+}
+```
+
+This allows the same trusted device logic to apply to multiple domains without duplication.
+
 ### Files
 
 - **trusted_ips.txt**: A text file with one trusted IP address per line.
