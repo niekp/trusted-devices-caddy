@@ -1,205 +1,178 @@
 # Trusted Devices Caddy Plugin
 
-This Caddy plugin enforces trusted devices based on IP addresses and tokens. Devices that connect from trusted IPs receive a cookie with a token, allowing them to remain trusted for up to 1 year even when connecting from untrusted IPs.
+A Caddy plugin that restricts access to trusted devices based on IP addresses and secure tokens. Devices from trusted IPs receive a persistent cookie, allowing continued access even when connecting from different locations.
 
 ## Features
 
-- Maintains a list of trusted IP addresses in a file.
-- Stores trusted tokens (with expiry) in a JSON file.
-- Sets a cookie for devices connecting from trusted IPs.
-- Validates existing cookies to allow access without needing a trusted IP.
-- Configurable cookie name and max age.
+- IP-based access control with file-based configuration
+- Automatic token generation and persistent cookie creation
+- Configurable token expiration (default: 1 year)
+- Automatic cleanup of expired tokens on startup
+- Support for comments in IP list files
+- Comprehensive logging for debugging
 
 ## Installation
 
-### Prerequisites
-
-- Go 1.21 or later
-- xcaddy (for building Caddy with plugins)
-
-Install xcaddy if not already installed:
+### Using xcaddy (Recommended)
 
 ```bash
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+xcaddy build --with github.com/niekp/trusted-devices-caddy
 ```
 
-### Building
+For multiple plugins:
+```bash
+xcaddy build \
+  --with github.com/niekp/trusted-devices-caddy \
+  # --with other-plugin
+```
 
-#### Option 1: Using caddy add-package (Recommended for Installation)
-
-If you have Caddy installed, add the plugin directly:
+### Using caddy add-package
 
 ```bash
 sudo caddy add-package github.com/niekp/trusted-devices-caddy
 ```
 
-This will download and integrate the plugin into your Caddy installation.
+## Configuration
 
-#### Option 2: Building from Source
+### Basic Usage
 
-Clone this repository:
-
-```bash
-git clone https://github.com/niekp/trusted-devices-caddy.git
-cd trusted-devices-caddy
-```
-
-Build Caddy with the plugin:
-
-```bash
-xcaddy build --with .
-```
-
-For cross-compilation (e.g., for Linux AMD64 from macOS):
-
-```bash
-xcaddy build --with . --os linux --arch amd64 --output caddy-server
-```
-
-## Usage
-
-### Configuration
-
-Add the plugin to your Caddyfile:
-
-```
+```caddyfile
 {
-    http_port 80
-    https_port 443
+    order trusted_devices before authenticate
 }
 
 example.com {
     trusted_devices {
-        trusted_ips_file "/path/to/trusted_ips.txt"
-        trusted_tokens_file "/path/to/trusted_tokens.json"
+        trusted_ips_file "/etc/caddy/trusted_ips.txt"
+        trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
-        max_age "8760h"  # 1 year
+        max_age "8760h"
     }
-    # Other directives...
     reverse_proxy localhost:8080
 }
 ```
 
-### Reusing Configuration Across Sites
+### Shared Configuration
 
-You can define the `trusted_devices` configuration in a snippet and import it into multiple sites:
+Use snippets to reuse configuration across multiple sites:
 
-```
+```caddyfile
+{
+    order trusted_devices before authenticate
+}
+
 (trusted_devices_config) {
     trusted_devices {
         trusted_ips_file "/etc/caddy/trusted_ips.txt"
-        trusted_tokens_file "/etc/caddy/trusted_tokens.json"
+        trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
         max_age "8760h"
     }
 }
 
-site1.com {
-    import trusted_devices_config
-    reverse_proxy localhost:8080
-}
-
-site2.com {
-    import trusted_devices_config
-    reverse_proxy localhost:8081
+*.example.com {
+    @site1 host site1.example.com
+    handle @site1 {
+        route {
+            import trusted_devices_config
+            reverse_proxy localhost:8080
+        }
+    }
 }
 ```
 
-This allows the same trusted device logic to apply to multiple domains without duplication.
+**Important**: Use `route` blocks inside `handle` directives to preserve handler ordering.
 
-### Files
+### Configuration Options
 
-- **trusted_ips.txt**: A text file with one trusted IP address per line.
-  ```
-  192.168.1.100
-  10.0.0.1
-  ```
+| Option | Description | Default |
+|--------|-------------|---------|
+| `trusted_ips_file` | Path to file with trusted IP addresses (one per line) | `trusted_ips.txt` |
+| `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
+| `cookie_name` | Name of the authentication cookie | `trusted_device` |
+| `max_age` | Token validity duration | `8760h` (1 year) |
 
-- **trusted_tokens.json**: Automatically managed JSON file storing tokens and their expiry times. Do not edit manually.
+### File Format
 
-### How It Works
+**trusted_ips.txt**:
+```
+# Home network
+192.168.1.100
+# Office
+10.0.0.1
+```
 
-1. When a request comes from a trusted IP:
-   - If no valid cookie is present, a new token is generated, stored, and sent as a cookie.
-   - The device is allowed access.
+**trusted_tokens.json** (auto-managed):
+```json
+{
+  "a1b2c3d4-...": "2026-12-19T14:30:00Z"
+}
+```
 
-2. When a request has a valid cookie (token exists and not expired):
-   - Access is granted, regardless of IP.
+## How It Works
 
-3. Otherwise, access is denied with a 403 Forbidden response.
+1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
+2. **Token Validation**: Request with valid cookie → allows access (any IP)
+3. **Denied Access**: No valid cookie or trusted IP → 403 Forbidden
 
-## Debugging
+## Troubleshooting
 
-### Local Testing
+### Tokens Not Persisting
 
-1. Build the plugin as above.
+**Error**: `"failed to save token","error":"...read-only file system"`
 
-2. Create sample files:
-   - `trusted_ips.txt` with your local IP or `127.0.0.1`.
-   - `trusted_tokens.json` can be empty initially.
-
-3. Create a simple Caddyfile:
-
-   ```
-   :8080 {
-       trusted_devices {
-           trusted_ips_file "trusted_ips.txt"
-           trusted_tokens_file "trusted_tokens.json"
-       }
-       respond "Hello, trusted device!"
-   }
-   ```
-
-4. Run Caddy:
-
-   ```bash
-   ./caddy run --config Caddyfile
-   ```
-
-5. Test:
-   - From a trusted IP: `curl http://localhost:8080` should work and set a cookie.
-   - From an untrusted IP: Should return 403.
-   - With the cookie: `curl -b "trusted_device=<token>" http://localhost:8080` should work.
-
-### Logs
-
-Enable debug logging in Caddy:
-
+**Solution**: Use a writable directory for tokens:
 ```bash
-./caddy run --config Caddyfile --log-level debug
+sudo mkdir -p /var/lib/caddy
+sudo chown caddy:caddy /var/lib/caddy
 ```
 
-Check logs for plugin behavior.
+Update Caddyfile to use `/var/lib/caddy/trusted_tokens.json`.
 
-### Common Issues
+### Access Denied (403)
 
-- **403 Forbidden**: Ensure your IP is in `trusted_ips.txt` or you have a valid cookie.
-- **File permissions**: Ensure Caddy can read/write the token file.
-- **IP detection**: If behind a proxy, ensure `X-Forwarded-For` or `X-Real-IP` headers are set correctly.
+- Verify your IP is in `trusted_ips.txt`
+- Check logs: `sudo journalctl -u caddy -f | grep trusted_devices`
+- Behind a proxy? Ensure `X-Forwarded-For` or `X-Real-IP` headers are forwarded
 
-## Deployment
+### Directive Not Recognized
 
-For production deployment:
+**Error**: `unrecognized directive: trusted_devices`
 
-1. Build the binary for your server's architecture.
-2. Transfer the binary, Caddyfile, and `trusted_ips.txt` to the server.
-3. Run Caddy as a service (e.g., via systemd).
+**Solution**: Rebuild Caddy with the plugin and ensure the binary is deployed to the server.
 
-Example systemd service:
+### Debugging
 
-```ini
-[Unit]
-Description=Caddy Web Server
-After=network.target
-
-[Service]
-User=caddy
-ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
+Enable debug logging to see detailed token operations:
+```bash
+caddy run --config /etc/caddy/Caddyfile --log-level debug
 ```
+
+Look for logs containing:
+- `"loaded trusted IPs"` - confirms IP file loaded
+- `"loaded trusted tokens"` - confirms existing tokens loaded
+- `"saved tokens to file"` - confirms token persistence
+
+## Production Deployment
+
+1. Build for your target architecture:
+   ```bash
+   xcaddy build --with github.com/niekp/trusted-devices-caddy --os linux --arch amd64
+   ```
+
+2. Set up directories with proper permissions:
+   ```bash
+   sudo mkdir -p /var/lib/caddy /etc/caddy
+   sudo chown caddy:caddy /var/lib/caddy
+   sudo chmod 755 /var/lib/caddy /etc/caddy
+   ```
+
+3. Deploy files:
+   - Caddy binary → `/usr/local/bin/caddy`
+   - Caddyfile → `/etc/caddy/Caddyfile`
+   - trusted_ips.txt → `/etc/caddy/trusted_ips.txt`
+
+4. Run as systemd service (Caddy's default service file works without modification)
 
 ## License
 
