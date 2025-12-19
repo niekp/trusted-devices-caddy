@@ -2,6 +2,8 @@
 
 A Caddy plugin that restricts access to trusted devices based on IP addresses and secure tokens. Devices from trusted IPs receive a persistent cookie, allowing continued access even when connecting from different locations.
 
+Great for web-applications that you want to access outside of your network also. Login once on your trusted network so your device gets a cookie and now the site works everywhere.
+
 ## Features
 
 - IP-based access control with file-based configuration
@@ -9,7 +11,12 @@ A Caddy plugin that restricts access to trusted devices based on IP addresses an
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup
 - Support for comments in IP list files
-- Comprehensive logging for debugging
+
+## Doesn't support (yet)
+
+- Applications that need to be accessed outside of the webbrowser, like home assistent, music servers, ...
+- Granting access with a special header
+- Granting access with a simple password
 
 ## Installation
 
@@ -73,15 +80,11 @@ Use snippets to reuse configuration across multiple sites:
 *.example.com {
     @site1 host site1.example.com
     handle @site1 {
-        route {
-            import trusted_devices_config
-            reverse_proxy localhost:8080
-        }
+         import trusted_devices_config
+         reverse_proxy localhost:8080
     }
 }
 ```
-
-**Important**: Use `route` blocks inside `handle` directives to preserve handler ordering.
 
 ### Configuration Options
 
@@ -152,27 +155,6 @@ Look for logs containing:
 - `"loaded trusted IPs"` - confirms IP file loaded
 - `"loaded trusted tokens"` - confirms existing tokens loaded
 - `"saved tokens to file"` - confirms token persistence
-
-## Production Deployment
-
-1. Build for your target architecture:
-   ```bash
-   xcaddy build --with github.com/niekp/trusted-devices-caddy --os linux --arch amd64
-   ```
-
-2. Set up directories with proper permissions:
-   ```bash
-   sudo mkdir -p /var/lib/caddy /etc/caddy
-   sudo chown caddy:caddy /var/lib/caddy
-   sudo chmod 755 /var/lib/caddy /etc/caddy
-   ```
-
-3. Deploy files:
-   - Caddy binary → `/usr/local/bin/caddy`
-   - Caddyfile → `/etc/caddy/Caddyfile`
-   - trusted_ips.txt → `/etc/caddy/trusted_ips.txt`
-
-4. Run as systemd service (Caddy's default service file works without modification)
 
 ## License
 
