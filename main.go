@@ -31,16 +31,18 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 
 // Middleware implements an HTTP middleware that enforces trusted devices.
 type Middleware struct {
-	TrustedIPsFile    string `json:"trusted_ips_file,omitempty"`
-	TrustedTokensFile string `json:"trusted_tokens_file,omitempty"`
-	CookieName        string `json:"cookie_name,omitempty"`
-	MaxAge            string `json:"max_age,omitempty"`
+	TrustedIPsFile        string `json:"trusted_ips_file,omitempty"`
+	TrustedUserAgentsFile string `json:"trusted_user_agents_file,omitempty"`
+	TrustedTokensFile     string `json:"trusted_tokens_file,omitempty"`
+	CookieName            string `json:"cookie_name,omitempty"`
+	MaxAge                string `json:"max_age,omitempty"`
 
-	trustedIPs map[string]bool
-	tokens     map[string]time.Time
-	maxAge     time.Duration
-	mu         sync.RWMutex
-	logger     *zap.Logger
+	trustedIPs        map[string]bool
+	trustedUserAgents map[string]bool
+	tokens            map[string]time.Time
+	maxAge            time.Duration
+	mu                sync.RWMutex
+	logger            *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -57,6 +59,9 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 
 	if m.TrustedIPsFile == "" {
 		m.TrustedIPsFile = "trusted_ips.txt"
+	}
+	if m.TrustedUserAgentsFile == "" {
+		m.TrustedUserAgentsFile = "trusted_user_agents.txt"
 	}
 	if m.TrustedTokensFile == "" {
 		m.TrustedTokensFile = "trusted_tokens.json"
@@ -89,6 +94,21 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		m.logger.Warn("could not load trusted IPs file", zap.String("file", m.TrustedIPsFile), zap.Error(err))
 	}
 
+	// Load trusted user agents
+	m.trustedUserAgents = make(map[string]bool)
+	if data, err := os.ReadFile(m.TrustedUserAgentsFile); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				m.trustedUserAgents[line] = true
+			}
+		}
+		m.logger.Info("loaded trusted user agents", zap.Int("count", len(m.trustedUserAgents)), zap.String("file", m.TrustedUserAgentsFile))
+	} else {
+		m.logger.Warn("could not load trusted user agents file", zap.String("file", m.TrustedUserAgentsFile), zap.Error(err))
+	}
+
 	// Load trusted tokens
 	m.tokens = make(map[string]time.Time)
 	if data, err := os.ReadFile(m.TrustedTokensFile); err == nil {
@@ -118,6 +138,9 @@ func (m *Middleware) Validate() error {
 	if m.TrustedIPsFile == "" {
 		return fmt.Errorf("trusted_ips_file cannot be empty")
 	}
+	if m.TrustedUserAgentsFile == "" {
+		return fmt.Errorf("trusted_user_agents_file cannot be empty")
+	}
 	if m.TrustedTokensFile == "" {
 		return fmt.Errorf("trusted_tokens_file cannot be empty")
 	}
@@ -130,9 +153,11 @@ func (m *Middleware) Validate() error {
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := getClientIP(r)
+	userAgent := r.UserAgent()
 
 	m.mu.RLock()
 	isTrustedIP := m.trustedIPs[clientIP]
+	isTrustedUA := m.trustedUserAgents[userAgent]
 	m.mu.RUnlock()
 
 	cookie, err := r.Cookie(m.CookieName)
@@ -146,8 +171,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		}
 	}
 
-	if hasValidCookie || isTrustedIP {
-		if isTrustedIP && !hasValidCookie {
+	if hasValidCookie || isTrustedIP || isTrustedUA {
+		if (isTrustedIP || isTrustedUA) && !hasValidCookie {
 			// Generate new token
 			token := uuid.New().String()
 			expiry := time.Now().Add(m.maxAge)
@@ -224,6 +249,10 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			switch d.Val() {
 			case "trusted_ips_file":
 				if !d.Args(&m.TrustedIPsFile) {
+					return d.ArgErr()
+				}
+			case "trusted_user_agents_file":
+				if !d.Args(&m.TrustedUserAgentsFile) {
 					return d.ArgErr()
 				}
 			case "trusted_tokens_file":

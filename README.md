@@ -6,11 +6,11 @@ Great for web-applications that you want to access outside of your network also.
 
 ## Features
 
-- IP-based access control with file-based configuration
+- IP-based and User-Agent-based access control with file-based configuration
 - Automatic token generation and persistent cookie creation
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup
-- Support for comments in IP list files
+- Support for comments in IP and User-Agent list files
 
 ## Doesn't support (yet)
 
@@ -51,6 +51,7 @@ sudo caddy add-package github.com/niekp/trusted-devices-caddy
 example.com {
     trusted_devices {
         trusted_ips_file "/etc/caddy/trusted_ips.txt"
+        trusted_user_agents_file "/etc/caddy/trusted_user_agents.txt"
         trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
         max_age "8760h"
@@ -71,6 +72,7 @@ Use snippets to reuse configuration across multiple sites:
 (trusted_devices_config) {
     trusted_devices {
         trusted_ips_file "/etc/caddy/trusted_ips.txt"
+        trusted_user_agents_file "/etc/caddy/trusted_user_agents.txt"
         trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
         max_age "8760h"
@@ -91,6 +93,7 @@ Use snippets to reuse configuration across multiple sites:
 | Option | Description | Default |
 |--------|-------------|---------|
 | `trusted_ips_file` | Path to file with trusted IP addresses (one per line) | `trusted_ips.txt` |
+| `trusted_user_agents_file` | Path to file with trusted User-Agent strings (one per line) | `trusted_user_agents.txt` |
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
 | `max_age` | Token validity duration | `8760h` (1 year) |
@@ -105,6 +108,14 @@ Use snippets to reuse configuration across multiple sites:
 10.0.0.1
 ```
 
+**trusted_user_agents.txt**:
+```
+# Mobile app
+MyApp/1.0
+# Desktop client
+MyDesktopApp/2.1 (Windows)
+```
+
 **trusted_tokens.json** (auto-managed):
 ```json
 {
@@ -114,9 +125,9 @@ Use snippets to reuse configuration across multiple sites:
 
 ## How It Works
 
-1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
-2. **Token Validation**: Request with valid cookie → allows access (any IP)
-3. **Denied Access**: No valid cookie or trusted IP → 403 Forbidden
+1. **Trusted IP/UA Access**: Request from trusted IP or with trusted User-Agent → generates token → sets cookie → allows access
+2. **Token Validation**: Request with valid cookie → allows access (any IP or UA)
+3. **Denied Access**: No valid cookie or trusted IP/UA → 403 Forbidden
 
 ## Troubleshooting
 
