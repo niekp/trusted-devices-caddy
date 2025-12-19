@@ -56,12 +56,6 @@ For cross-compilation (e.g., for Linux AMD64 from macOS):
 xcaddy build --with . --os linux --arch amd64 --output caddy-server
 ```
 
-Alternatively, using go build (requires a separate main file):
-
-```bash
-# Not directly applicable since this is a plugin module
-```
-
 ## Usage
 
 ### Configuration
