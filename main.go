@@ -15,6 +15,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 func init() {
@@ -39,6 +40,7 @@ type Middleware struct {
 	tokens     map[string]time.Time
 	maxAge     time.Duration
 	mu         sync.RWMutex
+	logger     *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -51,6 +53,8 @@ func (*Middleware) CaddyModule() caddy.ModuleInfo {
 
 // Provision sets up the module.
 func (m *Middleware) Provision(ctx caddy.Context) error {
+	m.logger = ctx.Logger()
+
 	if m.TrustedIPsFile == "" {
 		m.TrustedIPsFile = "trusted_ips.txt"
 	}
@@ -67,7 +71,7 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	var err error
 	m.maxAge, err = time.ParseDuration(m.MaxAge)
 	if err != nil {
-		return err
+		return fmt.Errorf("parsing max_age: %w", err)
 	}
 
 	// Load trusted IPs
@@ -76,16 +80,34 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if line != "" {
+			if line != "" && !strings.HasPrefix(line, "#") {
 				m.trustedIPs[line] = true
 			}
 		}
+		m.logger.Info("loaded trusted IPs", zap.Int("count", len(m.trustedIPs)), zap.String("file", m.TrustedIPsFile))
+	} else {
+		m.logger.Warn("could not load trusted IPs file", zap.String("file", m.TrustedIPsFile), zap.Error(err))
 	}
 
 	// Load trusted tokens
 	m.tokens = make(map[string]time.Time)
 	if data, err := os.ReadFile(m.TrustedTokensFile); err == nil {
-		json.Unmarshal(data, &m.tokens)
+		if err := json.Unmarshal(data, &m.tokens); err != nil {
+			m.logger.Error("failed to parse tokens file", zap.String("file", m.TrustedTokensFile), zap.Error(err))
+		} else {
+			// Clean up expired tokens
+			now := time.Now()
+			for token, expiry := range m.tokens {
+				if now.After(expiry) {
+					delete(m.tokens, token)
+				}
+			}
+			m.logger.Info("loaded trusted tokens", zap.Int("count", len(m.tokens)), zap.String("file", m.TrustedTokensFile))
+		}
+	} else if !os.IsNotExist(err) {
+		m.logger.Warn("could not load tokens file", zap.String("file", m.TrustedTokensFile), zap.Error(err))
+	} else {
+		m.logger.Info("tokens file does not exist yet, will be created on first use", zap.String("file", m.TrustedTokensFile))
 	}
 
 	return nil
@@ -135,7 +157,9 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			m.mu.Unlock()
 
 			// Save to file
-			m.saveTokens()
+			if err := m.saveTokens(); err != nil {
+				m.logger.Error("failed to save token", zap.Error(err))
+			}
 
 			// Set cookie
 			http.SetCookie(w, &http.Cookie{
@@ -158,9 +182,20 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 }
 
 // saveTokens saves the tokens to file.
-func (m *Middleware) saveTokens() {
-	data, _ := json.MarshalIndent(m.tokens, "", "  ")
-	os.WriteFile(m.TrustedTokensFile, data, 0644)
+func (m *Middleware) saveTokens() error {
+	m.mu.RLock()
+	data, err := json.MarshalIndent(m.tokens, "", "  ")
+	m.mu.RUnlock()
+	if err != nil {
+		return fmt.Errorf("marshaling tokens: %w", err)
+	}
+
+	if err := os.WriteFile(m.TrustedTokensFile, data, 0644); err != nil {
+		return fmt.Errorf("writing tokens file: %w", err)
+	}
+
+	m.logger.Debug("saved tokens to file", zap.String("file", m.TrustedTokensFile), zap.Int("count", len(m.tokens)))
+	return nil
 }
 
 // getClientIP extracts the client IP from the request.
