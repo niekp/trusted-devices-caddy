@@ -193,7 +193,7 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 				Path:     "/",
 				HttpOnly: true,
 				Secure:   r.TLS != nil,
-				SameSite: http.SameSiteLaxMode,
+				SameSite: http.SameSiteStrictMode,
 				MaxAge:   int(m.maxAge.Seconds()),
 			})
 		}
