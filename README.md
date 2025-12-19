@@ -47,19 +47,19 @@ cd trusted-devices-caddy
 Build Caddy with the plugin:
 
 ```bash
-go build .
+xcaddy build --with .
 ```
 
 For cross-compilation (e.g., for Linux AMD64 from macOS):
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o caddy-server .
+xcaddy build --with . --os linux --arch amd64 --output caddy-server
 ```
 
-Alternatively, using xcaddy (if installed):
+Alternatively, using go build (requires a separate main file):
 
 ```bash
-xcaddy build --with github.com/niekp/trusted-devices-caddy
+# Not directly applicable since this is a plugin module
 ```
 
 ## Usage

@@ -14,16 +14,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/google/uuid"
-
-	caddycmd "github.com/caddyserver/caddy/v2/cmd"
-
-	// plug in Caddy modules here
-	_ "github.com/caddyserver/caddy/v2/modules/standard"
 )
-
-func main() {
-	caddycmd.Main()
-}
 
 func init() {
 	caddy.RegisterModule(Middleware{})
