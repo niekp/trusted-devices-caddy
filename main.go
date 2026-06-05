@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,18 +32,18 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 
 // Middleware implements an HTTP middleware that enforces trusted devices.
 type Middleware struct {
-	TrustedIPsFile        string `json:"trusted_ips_file,omitempty"`
-	TrustedUserAgentsFile string `json:"trusted_user_agents_file,omitempty"`
-	TrustedTokensFile     string `json:"trusted_tokens_file,omitempty"`
-	CookieName            string `json:"cookie_name,omitempty"`
-	MaxAge                string `json:"max_age,omitempty"`
+	TrustedIPsFile    string `json:"trusted_ips_file,omitempty"`
+	TrustedTokensFile string `json:"trusted_tokens_file,omitempty"`
+	CookieName        string `json:"cookie_name,omitempty"`
+	MaxAge            string `json:"max_age,omitempty"`
 
-	trustedIPs        map[string]bool
-	trustedUserAgents map[string]bool
-	tokens            map[string]time.Time
-	maxAge            time.Duration
-	mu                sync.RWMutex
-	logger            *zap.Logger
+	trustedIPs  map[string]bool
+	tokens      map[string]time.Time
+	maxAge      time.Duration
+	mu          sync.RWMutex
+	saveMu      sync.Mutex // serializes writes to the tokens file
+	stopCleanup chan struct{}
+	logger      *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -59,9 +60,6 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 
 	if m.TrustedIPsFile == "" {
 		m.TrustedIPsFile = "trusted_ips.txt"
-	}
-	if m.TrustedUserAgentsFile == "" {
-		m.TrustedUserAgentsFile = "trusted_user_agents.txt"
 	}
 	if m.TrustedTokensFile == "" {
 		m.TrustedTokensFile = "trusted_tokens.json"
@@ -94,21 +92,6 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		m.logger.Warn("could not load trusted IPs file", zap.String("file", m.TrustedIPsFile), zap.Error(err))
 	}
 
-	// Load trusted user agents
-	m.trustedUserAgents = make(map[string]bool)
-	if data, err := os.ReadFile(m.TrustedUserAgentsFile); err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				m.trustedUserAgents[line] = true
-			}
-		}
-		m.logger.Info("loaded trusted user agents", zap.Int("count", len(m.trustedUserAgents)), zap.String("file", m.TrustedUserAgentsFile))
-	} else {
-		m.logger.Warn("could not load trusted user agents file", zap.String("file", m.TrustedUserAgentsFile), zap.Error(err))
-	}
-
 	// Load trusted tokens
 	m.tokens = make(map[string]time.Time)
 	if data, err := os.ReadFile(m.TrustedTokensFile); err == nil {
@@ -130,6 +113,18 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		m.logger.Info("tokens file does not exist yet, will be created on first use", zap.String("file", m.TrustedTokensFile))
 	}
 
+	// Periodically prune expired tokens from memory and disk.
+	m.stopCleanup = make(chan struct{})
+	go m.cleanupLoop(time.Hour)
+
+	return nil
+}
+
+// Cleanup stops the background cleanup goroutine.
+func (m *Middleware) Cleanup() error {
+	if m.stopCleanup != nil {
+		close(m.stopCleanup)
+	}
 	return nil
 }
 
@@ -137,9 +132,6 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 func (m *Middleware) Validate() error {
 	if m.TrustedIPsFile == "" {
 		return fmt.Errorf("trusted_ips_file cannot be empty")
-	}
-	if m.TrustedUserAgentsFile == "" {
-		return fmt.Errorf("trusted_user_agents_file cannot be empty")
 	}
 	if m.TrustedTokensFile == "" {
 		return fmt.Errorf("trusted_tokens_file cannot be empty")
@@ -153,11 +145,9 @@ func (m *Middleware) Validate() error {
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := getClientIP(r)
-	userAgent := r.UserAgent()
 
 	m.mu.RLock()
 	isTrustedIP := m.trustedIPs[clientIP]
-	isTrustedUA := m.trustedUserAgents[userAgent]
 	m.mu.RUnlock()
 
 	cookie, err := r.Cookie(m.CookieName)
@@ -171,8 +161,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		}
 	}
 
-	if hasValidCookie || isTrustedIP || isTrustedUA {
-		if (isTrustedIP || isTrustedUA) && !hasValidCookie {
+	if hasValidCookie || isTrustedIP {
+		if isTrustedIP && !hasValidCookie {
 			// Generate new token
 			token := uuid.New().String()
 			expiry := time.Now().Add(m.maxAge)
@@ -206,35 +196,93 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 	return nil
 }
 
-// saveTokens saves the tokens to file.
+// cleanupLoop periodically removes expired tokens until Cleanup is called.
+func (m *Middleware) cleanupLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.stopCleanup:
+			return
+		case <-ticker.C:
+			m.pruneExpired()
+		}
+	}
+}
+
+// pruneExpired removes expired tokens from memory and persists the result.
+func (m *Middleware) pruneExpired() {
+	now := time.Now()
+	m.mu.Lock()
+	changed := false
+	for token, expiry := range m.tokens {
+		if now.After(expiry) {
+			delete(m.tokens, token)
+			changed = true
+		}
+	}
+	m.mu.Unlock()
+
+	if changed {
+		if err := m.saveTokens(); err != nil {
+			m.logger.Error("failed to save tokens after prune", zap.Error(err))
+		}
+	}
+}
+
+// saveTokens atomically persists the tokens to file with 0600 permissions.
+// Writes are serialized via saveMu so concurrent requests cannot clobber the
+// file or persist a stale snapshot.
 func (m *Middleware) saveTokens() error {
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
 	m.mu.RLock()
 	data, err := json.MarshalIndent(m.tokens, "", "  ")
+	count := len(m.tokens)
 	m.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("marshaling tokens: %w", err)
 	}
 
-	if err := os.WriteFile(m.TrustedTokensFile, data, 0644); err != nil {
-		return fmt.Errorf("writing tokens file: %w", err)
+	// Write to a temp file in the same directory, then atomically rename.
+	dir := filepath.Dir(m.TrustedTokensFile)
+	tmp, err := os.CreateTemp(dir, ".trusted_tokens-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp tokens file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if the rename succeeded
+
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp tokens file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing temp tokens file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp tokens file: %w", err)
+	}
+	if err := os.Rename(tmpName, m.TrustedTokensFile); err != nil {
+		return fmt.Errorf("renaming tokens file: %w", err)
 	}
 
-	m.logger.Debug("saved tokens to file", zap.String("file", m.TrustedTokensFile), zap.Int("count", len(m.tokens)))
+	m.logger.Debug("saved tokens to file", zap.String("file", m.TrustedTokensFile), zap.Int("count", count))
 	return nil
 }
 
-// getClientIP extracts the client IP from the request.
+// getClientIP returns the client IP as resolved by Caddy. Caddy populates this
+// from RemoteAddr, only honoring forwarding headers (X-Forwarded-For etc.) when
+// the request actually arrived through a configured trusted_proxies hop. We must
+// not parse those headers ourselves: they are attacker-controlled and trusting
+// them would let anyone spoof a trusted IP.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		return strings.TrimSpace(ips[0])
+	if ip, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok && ip != "" {
+		return ip
 	}
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-	// Fallback to RemoteAddr
+	// Fallback for contexts where Caddy did not populate the var.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -249,10 +297,6 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			switch d.Val() {
 			case "trusted_ips_file":
 				if !d.Args(&m.TrustedIPsFile) {
-					return d.ArgErr()
-				}
-			case "trusted_user_agents_file":
-				if !d.Args(&m.TrustedUserAgentsFile) {
 					return d.ArgErr()
 				}
 			case "trusted_tokens_file":
@@ -278,6 +322,7 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 // Interface guards
 var (
 	_ caddy.Provisioner           = (*Middleware)(nil)
+	_ caddy.CleanerUpper          = (*Middleware)(nil)
 	_ caddy.Validator             = (*Middleware)(nil)
 	_ caddyhttp.MiddlewareHandler = (*Middleware)(nil)
 	_ caddyfile.Unmarshaler       = (*Middleware)(nil)

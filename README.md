@@ -6,11 +6,33 @@ Great for web-applications that you want to access outside of your network also.
 
 ## Features
 
-- IP-based and User-Agent-based access control with file-based configuration
+- IP-based access control with file-based configuration
 - Automatic token generation and persistent cookie creation
 - Configurable token expiration (default: 1 year)
-- Automatic cleanup of expired tokens on startup
-- Support for comments in IP and User-Agent list files
+- Automatic cleanup of expired tokens on startup and periodically while running
+- Support for comments in the IP list file
+
+## Security model
+
+Access is granted when **either** of these holds:
+
+1. The request comes from a trusted IP (which then mints a long-lived cookie), or
+2. The request carries a valid token cookie.
+
+The client IP is taken from Caddy's resolved `client_ip`, **not** from raw
+`X-Forwarded-For` / `X-Real-IP` headers. Those headers are attacker-controlled;
+trusting them directly would let anyone spoof a trusted IP. Caddy only honors
+forwarding headers for hops you explicitly mark as trusted.
+
+> ⚠️ **If Caddy sits behind another proxy** (Cloudflare, nginx, a load balancer),
+> you **must** configure [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies)
+> in the global options. Without it, Caddy treats the proxy's address as the
+> client IP, so no real client IP will ever match your trusted list. With it
+> configured, only forwarding headers added by that trusted proxy are honored.
+
+Tokens are 122-bit random UUIDs and are stored in a `0600` file written
+atomically. User-Agent strings are **not** used for access decisions — they are
+trivially forgeable and not secret.
 
 ## Doesn't support (yet)
 
@@ -51,7 +73,6 @@ sudo caddy add-package github.com/niekp/trusted-devices-caddy
 example.com {
     trusted_devices {
         trusted_ips_file "/etc/caddy/trusted_ips.txt"
-        trusted_user_agents_file "/etc/caddy/trusted_user_agents.txt"
         trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
         max_age "8760h"
@@ -72,7 +93,6 @@ Use snippets to reuse configuration across multiple sites:
 (trusted_devices_config) {
     trusted_devices {
         trusted_ips_file "/etc/caddy/trusted_ips.txt"
-        trusted_user_agents_file "/etc/caddy/trusted_user_agents.txt"
         trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
         cookie_name "trusted_device"
         max_age "8760h"
@@ -93,7 +113,6 @@ Use snippets to reuse configuration across multiple sites:
 | Option | Description | Default |
 |--------|-------------|---------|
 | `trusted_ips_file` | Path to file with trusted IP addresses (one per line) | `trusted_ips.txt` |
-| `trusted_user_agents_file` | Path to file with trusted User-Agent strings (one per line) | `trusted_user_agents.txt` |
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
 | `max_age` | Token validity duration | `8760h` (1 year) |
@@ -108,14 +127,6 @@ Use snippets to reuse configuration across multiple sites:
 10.0.0.1
 ```
 
-**trusted_user_agents.txt**:
-```
-# Mobile app
-MyApp/1.0
-# Desktop client
-MyDesktopApp/2.1 (Windows)
-```
-
 **trusted_tokens.json** (auto-managed):
 ```json
 {
@@ -125,9 +136,9 @@ MyDesktopApp/2.1 (Windows)
 
 ## How It Works
 
-1. **Trusted IP/UA Access**: Request from trusted IP or with trusted User-Agent → generates token → sets cookie → allows access
-2. **Token Validation**: Request with valid cookie → allows access (any IP or UA)
-3. **Denied Access**: No valid cookie or trusted IP/UA → 403 Forbidden
+1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
+2. **Token Validation**: Request with valid cookie → allows access (any IP)
+3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
 
 ## Troubleshooting
 
@@ -147,7 +158,7 @@ Update Caddyfile to use `/var/lib/caddy/trusted_tokens.json`.
 
 - Verify your IP is in `trusted_ips.txt`
 - Check logs: `sudo journalctl -u caddy -f | grep trusted_devices`
-- Behind a proxy? Ensure `X-Forwarded-For` or `X-Real-IP` headers are forwarded
+- Behind a proxy? Configure `trusted_proxies` in Caddy's global options (see [Security model](#security-model)). Without it, Caddy never resolves the real client IP and every request is denied.
 
 ### Directive Not Recognized
 
