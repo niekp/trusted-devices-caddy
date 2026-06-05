@@ -102,8 +102,8 @@ func TestTrustedIPGrantsAccessAndIssuesCookie(t *testing.T) {
 	if !c.HttpOnly {
 		t.Error("cookie should be HttpOnly")
 	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Error("cookie should be SameSite=Lax")
+	if c.SameSite != http.SameSiteStrictMode {
+		t.Error("cookie should be SameSite=Strict")
 	}
 	// Token must be persisted and valid.
 	if _, ok := m.tokens[c.Value]; !ok {
