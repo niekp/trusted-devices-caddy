@@ -41,12 +41,13 @@ func newReq(clientIP string, headers map[string]string) *http.Request {
 
 func newMiddleware(t *testing.T) *Middleware {
 	t.Helper()
+	path := filepath.Join(t.TempDir(), "tokens.json")
 	return &Middleware{
-		TrustedTokensFile: filepath.Join(t.TempDir(), "tokens.json"),
+		TrustedTokensFile: path,
 		CookieName:        "trusted_device",
 		maxAge:            8760 * time.Hour,
 		trustedIPs:        map[string]bool{"192.168.1.100": true},
-		tokens:            map[string]time.Time{},
+		tokens:            newTokenStore(path, zap.NewNop()),
 		logger:            zap.NewNop(),
 	}
 }
@@ -106,7 +107,7 @@ func TestTrustedIPGrantsAccessAndIssuesCookie(t *testing.T) {
 		t.Error("cookie should be SameSite=Lax")
 	}
 	// Token must be persisted and valid.
-	if _, ok := m.tokens[c.Value]; !ok {
+	if _, ok := m.tokens.tokens[c.Value]; !ok {
 		t.Error("token not stored in memory")
 	}
 }
@@ -114,7 +115,7 @@ func TestTrustedIPGrantsAccessAndIssuesCookie(t *testing.T) {
 func TestValidCookieGrantsAccessFromUntrustedIP(t *testing.T) {
 	m := newMiddleware(t)
 	token := "valid-token-123"
-	m.tokens[token] = time.Now().Add(time.Hour)
+	m.tokens.tokens[token] = time.Now().Add(time.Hour)
 
 	r := newReq("203.0.113.7", nil) // untrusted IP
 	r.AddCookie(&http.Cookie{Name: m.CookieName, Value: token})
@@ -127,7 +128,7 @@ func TestValidCookieGrantsAccessFromUntrustedIP(t *testing.T) {
 func TestExpiredCookieDenied(t *testing.T) {
 	m := newMiddleware(t)
 	token := "expired-token"
-	m.tokens[token] = time.Now().Add(-time.Hour)
+	m.tokens.tokens[token] = time.Now().Add(-time.Hour)
 
 	r := newReq("203.0.113.7", nil)
 	r.AddCookie(&http.Cookie{Name: m.CookieName, Value: token})
@@ -171,8 +172,8 @@ func TestEmptyTrustedIPsFailsClosed(t *testing.T) {
 
 func TestSaveTokensPermissionsAndAtomicity(t *testing.T) {
 	m := newMiddleware(t)
-	m.tokens["tok"] = time.Now().Add(time.Hour)
-	if err := m.saveTokens(); err != nil {
+	m.tokens.tokens["tok"] = time.Now().Add(time.Hour)
+	if err := m.tokens.save(); err != nil {
 		t.Fatalf("saveTokens failed: %v", err)
 	}
 	info, err := os.Stat(m.TrustedTokensFile)
@@ -207,10 +208,10 @@ func TestConcurrentSaveTokens(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			m.mu.Lock()
-			m.tokens[time.Now().Format(time.RFC3339Nano)+string(rune(n))] = time.Now().Add(time.Hour)
-			m.mu.Unlock()
-			if err := m.saveTokens(); err != nil {
+			m.tokens.mu.Lock()
+			m.tokens.tokens[time.Now().Format(time.RFC3339Nano)+string(rune(n))] = time.Now().Add(time.Hour)
+			m.tokens.mu.Unlock()
+			if err := m.tokens.save(); err != nil {
 				t.Errorf("concurrent saveTokens failed: %v", err)
 			}
 		}(i)
@@ -228,13 +229,13 @@ func TestConcurrentSaveTokens(t *testing.T) {
 
 func TestPruneExpired(t *testing.T) {
 	m := newMiddleware(t)
-	m.tokens["live"] = time.Now().Add(time.Hour)
-	m.tokens["dead"] = time.Now().Add(-time.Hour)
-	m.pruneExpired()
-	if _, ok := m.tokens["dead"]; ok {
+	m.tokens.tokens["live"] = time.Now().Add(time.Hour)
+	m.tokens.tokens["dead"] = time.Now().Add(-time.Hour)
+	m.tokens.pruneExpired()
+	if _, ok := m.tokens.tokens["dead"]; ok {
 		t.Error("expired token not pruned")
 	}
-	if _, ok := m.tokens["live"]; !ok {
+	if _, ok := m.tokens.tokens["live"]; !ok {
 		t.Error("live token incorrectly pruned")
 	}
 }
@@ -256,5 +257,62 @@ func TestGetClientIPFallbackToRemoteAddr(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", "192.168.1.100")
 	if ip := getClientIP(r); ip != "203.0.113.9" {
 		t.Fatalf("getClientIP fallback = %q, want 203.0.113.9", ip)
+	}
+}
+
+// Every site importing the same config gets its own handler; all must share one token set.
+func TestHandlersOnSameFileShareTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	siteA := newMiddleware(t)
+	siteB := newMiddleware(t)
+	for _, m := range []*Middleware{siteA, siteB} {
+		store, err := acquireTokenStore(path, zap.NewNop())
+		if err != nil {
+			t.Fatalf("acquireTokenStore: %v", err)
+		}
+		m.TrustedTokensFile = path
+		m.tokens = store
+	}
+
+	recA, _ := serve(t, siteA, newReq("192.168.1.100", nil))
+	recB, _ := serve(t, siteB, newReq("192.168.1.100", nil))
+	releaseTokenStore(path)
+	releaseTokenStore(path)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading tokens file: %v", err)
+	}
+	var persisted map[string]time.Time
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("tokens file not valid JSON: %v", err)
+	}
+	for site, rec := range map[string]*httptest.ResponseRecorder{"A": recA, "B": recB} {
+		token := rec.Result().Cookies()[0].Value
+		if _, ok := persisted[token]; !ok {
+			t.Errorf("token of site %s missing from tokens file", site)
+		}
+	}
+}
+
+func TestTokensSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	before, err := acquireTokenStore(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("acquireTokenStore: %v", err)
+	}
+	token := before.issue(time.Hour)
+	releaseTokenStore(path)
+
+	after, err := acquireTokenStore(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("acquireTokenStore: %v", err)
+	}
+	defer releaseTokenStore(path)
+	if after == before {
+		t.Fatal("store was not reloaded from disk")
+	}
+	if !after.isValid(token) {
+		t.Fatal("token lost after restart")
 	}
 }
