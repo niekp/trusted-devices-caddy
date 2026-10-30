@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -33,7 +32,7 @@ type Middleware struct {
 	CookieName        string `json:"cookie_name,omitempty"`
 	MaxAge            string `json:"max_age,omitempty"`
 
-	trustedIPs map[string]bool
+	trustedIPs ipList
 	tokens     *tokenStore
 	maxAge     time.Duration
 	logger     *zap.Logger
@@ -71,14 +70,12 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	}
 
 	// Load trusted IPs
-	m.trustedIPs = make(map[string]bool)
+	m.trustedIPs = nil
 	if data, err := os.ReadFile(m.TrustedIPsFile); err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				m.trustedIPs[line] = true
-			}
+		var invalid []string
+		m.trustedIPs, invalid = parseIPList(string(data))
+		for _, line := range invalid {
+			m.logger.Warn("ignoring invalid trusted IP", zap.String("line", line), zap.String("file", m.TrustedIPsFile))
 		}
 		m.logger.Info("loaded trusted IPs", zap.Int("count", len(m.trustedIPs)), zap.String("file", m.TrustedIPsFile))
 	} else {
@@ -117,7 +114,7 @@ func (m *Middleware) Validate() error {
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	isTrustedIP := m.trustedIPs[getClientIP(r)]
+	isTrustedIP := m.trustedIPs.contains(getClientIP(r))
 
 	cookie, err := r.Cookie(m.CookieName)
 	hasValidCookie := err == nil && m.tokens.isValid(cookie.Value)

@@ -6,7 +6,7 @@ Great for web-applications that you want to access outside of your network also.
 
 ## Features
 
-- IP-based access control with file-based configuration
+- IP-based access control with file-based configuration, single addresses or CIDR ranges
 - Automatic token generation and persistent cookie creation
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup and periodically while running
@@ -112,7 +112,7 @@ Use snippets to reuse configuration across multiple sites:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `trusted_ips_file` | Path to file with trusted IP addresses (one per line) | `trusted_ips.txt` |
+| `trusted_ips_file` | Path to file with trusted IP addresses or CIDR ranges (one per line) | `trusted_ips.txt` |
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
 | `max_age` | Token validity duration | `8760h` (1 year) |
@@ -121,11 +121,15 @@ Use snippets to reuse configuration across multiple sites:
 
 **trusted_ips.txt**:
 ```
-# Home network
+# One device
 192.168.1.100
-# Office
-10.0.0.1
+# A whole network
+10.0.0.0/24
+# IPv6 works too
+2001:db8:1234::/64
 ```
+
+Lines that are neither an address nor a range are skipped with a warning in the log.
 
 **trusted_tokens.json** (auto-managed):
 ```json
