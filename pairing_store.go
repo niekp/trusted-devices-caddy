@@ -218,8 +218,9 @@ func (s *tokenStore) devices(current string) []device {
 	return list
 }
 
-// touch records that token was used, writing the file at most once per lastSeenResolution per device.
-func (s *tokenStore) touch(token string) {
+// touch records that token was used and extends it by maxAge from now, so a device in use never expires and devices
+// paired on the same day don't all expire at once. It writes the file at most once per lastSeenResolution per device.
+func (s *tokenStore) touch(token string, maxAge time.Duration) {
 	now := time.Now()
 	s.mu.Lock()
 	info, ok := s.tokens[token]
@@ -232,6 +233,7 @@ func (s *tokenStore) touch(token string) {
 	}
 	if changed {
 		info.LastSeen = now
+		info.Expires = now.Add(maxAge)
 		s.tokens[token] = info
 	}
 	s.mu.Unlock()

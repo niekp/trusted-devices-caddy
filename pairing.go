@@ -33,7 +33,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 		}
 	}
 	if approved {
-		m.tokens.touch(token)
+		m.tokens.touch(token, m.maxAge)
 		return next.ServeHTTP(w, r)
 	}
 	if !isNavigation(r) {

@@ -350,3 +350,34 @@ func TestOnlyOneFirstDevice(t *testing.T) {
 		t.Fatalf("%d devices approved by themselves, want 1", n)
 	}
 }
+
+func TestUseExtendsExpiry(t *testing.T) {
+	m := newPairingMiddleware(t)
+	token := pairFirstDevice(t, m)
+	old := time.Now().Add(-2 * lastSeenResolution)
+	m.tokens.mu.Lock()
+	info := m.tokens.tokens[token]
+	info.LastSeen, info.Expires = old, time.Now().Add(time.Minute)
+	m.tokens.tokens[token] = info
+	m.tokens.mu.Unlock()
+
+	serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
+	if expires := readTokensFile(t, m.tokens.path)[token].Expires; time.Until(expires) < m.maxAge-time.Minute {
+		t.Fatalf("expiry not extended on use: %v", expires)
+	}
+}
+
+func TestUseWithinAnHourDoesNotWrite(t *testing.T) {
+	m := newPairingMiddleware(t)
+	token := pairFirstDevice(t, m)
+	before, err := os.Stat(m.tokens.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
+	after, _ := os.Stat(m.tokens.path)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("tokens file written on every use")
+	}
+}

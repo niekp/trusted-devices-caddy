@@ -26,13 +26,13 @@ func editTokensFile(t *testing.T, s *tokenStore, content string) {
 	s.mu.Unlock()
 }
 
-func readTokensFile(t *testing.T, path string) map[string]time.Time {
+func readTokensFile(t *testing.T, path string) map[string]tokenInfo {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var tokens map[string]time.Time
+	var tokens map[string]tokenInfo
 	if err := json.Unmarshal(data, &tokens); err != nil {
 		t.Fatalf("tokens file not valid JSON: %v", err)
 	}

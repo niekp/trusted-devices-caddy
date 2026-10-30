@@ -117,7 +117,7 @@ Use snippets to reuse configuration across multiple sites:
 | `trusted_ips_file` | Path to file with trusted IP addresses or CIDR ranges (one per line) | `trusted_ips.txt` |
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
-| `max_age` | Token validity duration | `8760h` (1 year) |
+| `max_age` | Token validity duration; with `pairing`, counted from the last use | `8760h` (1 year) |
 | `pairing` | Approve each new device by hand (see [Pairing](#pairing)) | off |
 | `pairing_path` | Where the pairing page lives on each site | `/.trusted-devices` |
 
@@ -165,7 +165,7 @@ example.com {
 
 1. A new device opens the site on the trusted network and gets a page with a six-character code. It reloads by itself.
 2. On a device that's already approved, also on the trusted network, open `https://example.com/.trusted-devices`. The new device is listed with its code; give it a name and choose **Approve** (or **Reject**).
-3. The new device's page opens the site within a few seconds, and from then on it works anywhere, until `max_age` runs out.
+3. The new device's page opens the site within a few seconds, and from then on it works anywhere. Using it extends it, so only a device that's unused for `max_age` expires.
 
 The same page lists the approved devices with when they were last used, and revokes one with **Revoke**.
 
