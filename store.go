@@ -24,7 +24,7 @@ var tokenStores = caddy.NewUsagePool()
 // tokenStore holds the tokens of one tokens file; every handler using that file shares it.
 type tokenStore struct {
 	path        string
-	tokens      map[string]time.Time
+	tokens      map[string]tokenInfo
 	mu          sync.RWMutex
 	saveMu      sync.Mutex // serializes writes to the tokens file
 	stopCleanup chan struct{}
@@ -38,6 +38,10 @@ type tokenStore struct {
 	lastCheck time.Time
 	// broken is set while the tokens file can't be parsed: no token is valid, and saving won't overwrite the file.
 	broken bool
+
+	// pending holds the devices waiting for approval, by the token their cookie already carries. Kept in memory
+	// only: a restart asks them to pair again.
+	pending map[string]pendingDevice
 }
 
 // acquireTokenStore returns the shared store for path, loading it from disk on first use.
@@ -62,7 +66,8 @@ func releaseTokenStore(path string) {
 func newTokenStore(path string, logger *zap.Logger) *tokenStore {
 	return &tokenStore{
 		path:        path,
-		tokens:      make(map[string]time.Time),
+		tokens:      make(map[string]tokenInfo),
+		pending:     make(map[string]pendingDevice),
 		stopCleanup: make(chan struct{}),
 		logger:      logger,
 	}
@@ -104,7 +109,7 @@ func (s *tokenStore) syncLocked() {
 	if os.IsNotExist(err) {
 		if s.fileSeen {
 			s.logger.Info("tokens file removed, revoking all tokens", zap.String("file", s.path))
-			s.tokens = make(map[string]time.Time)
+			s.tokens = make(map[string]tokenInfo)
 			s.fileSeen = false
 			s.broken = false
 		}
@@ -124,10 +129,10 @@ func (s *tokenStore) syncLocked() {
 		s.logger.Warn("could not load tokens file", zap.String("file", s.path), zap.Error(err))
 		return
 	}
-	tokens := make(map[string]time.Time)
+	tokens := make(map[string]tokenInfo)
 	if err := json.Unmarshal(data, &tokens); err != nil {
 		s.logger.Error("failed to parse tokens file, denying all tokens until it is fixed", zap.String("file", s.path), zap.Error(err))
-		s.tokens = make(map[string]time.Time)
+		s.tokens = make(map[string]tokenInfo)
 		s.broken = true
 		return
 	}
@@ -141,9 +146,9 @@ func (s *tokenStore) syncLocked() {
 func (s *tokenStore) isValid(token string) bool {
 	s.refresh()
 	s.mu.RLock()
-	expiry, exists := s.tokens[token]
+	info, exists := s.tokens[token]
 	s.mu.RUnlock()
-	return exists && time.Now().Before(expiry)
+	return exists && time.Now().Before(info.Expires)
 }
 
 // issue creates and persists a new token valid for maxAge.
@@ -152,7 +157,7 @@ func (s *tokenStore) issue(maxAge time.Duration) string {
 
 	s.mu.Lock()
 	s.syncLocked()
-	s.tokens[token] = time.Now().Add(maxAge)
+	s.tokens[token] = tokenInfo{Expires: time.Now().Add(maxAge)}
 	s.mu.Unlock()
 
 	if err := s.save(); err != nil {
@@ -192,8 +197,8 @@ func (s *tokenStore) pruneExpired() {
 // removeExpired deletes tokens expired at now; the caller holds the lock if needed.
 func (s *tokenStore) removeExpired(now time.Time) bool {
 	changed := false
-	for token, expiry := range s.tokens {
-		if now.After(expiry) {
+	for token, info := range s.tokens {
+		if now.After(info.Expires) {
 			delete(s.tokens, token)
 			changed = true
 		}

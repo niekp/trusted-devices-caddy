@@ -117,7 +117,7 @@ func TestTrustedIPGrantsAccessAndIssuesCookie(t *testing.T) {
 func TestValidCookieGrantsAccessFromUntrustedIP(t *testing.T) {
 	m := newMiddleware(t)
 	token := "valid-token-123"
-	m.tokens.tokens[token] = time.Now().Add(time.Hour)
+	m.tokens.tokens[token] = tokenInfo{Expires: time.Now().Add(time.Hour)}
 
 	r := newReq("203.0.113.7", nil) // untrusted IP
 	r.AddCookie(&http.Cookie{Name: m.CookieName, Value: token})
@@ -130,7 +130,7 @@ func TestValidCookieGrantsAccessFromUntrustedIP(t *testing.T) {
 func TestExpiredCookieDenied(t *testing.T) {
 	m := newMiddleware(t)
 	token := "expired-token"
-	m.tokens.tokens[token] = time.Now().Add(-time.Hour)
+	m.tokens.tokens[token] = tokenInfo{Expires: time.Now().Add(-time.Hour)}
 
 	r := newReq("203.0.113.7", nil)
 	r.AddCookie(&http.Cookie{Name: m.CookieName, Value: token})
@@ -174,7 +174,7 @@ func TestEmptyTrustedIPsFailsClosed(t *testing.T) {
 
 func TestSaveTokensPermissionsAndAtomicity(t *testing.T) {
 	m := newMiddleware(t)
-	m.tokens.tokens["tok"] = time.Now().Add(time.Hour)
+	m.tokens.tokens["tok"] = tokenInfo{Expires: time.Now().Add(time.Hour)}
 	if err := m.tokens.save(); err != nil {
 		t.Fatalf("saveTokens failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestConcurrentSaveTokens(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			m.tokens.mu.Lock()
-			m.tokens.tokens[time.Now().Format(time.RFC3339Nano)+string(rune(n))] = time.Now().Add(time.Hour)
+			m.tokens.tokens[time.Now().Format(time.RFC3339Nano)+string(rune(n))] = tokenInfo{Expires: time.Now().Add(time.Hour)}
 			m.tokens.mu.Unlock()
 			if err := m.tokens.save(); err != nil {
 				t.Errorf("concurrent saveTokens failed: %v", err)
@@ -231,8 +231,8 @@ func TestConcurrentSaveTokens(t *testing.T) {
 
 func TestPruneExpired(t *testing.T) {
 	m := newMiddleware(t)
-	m.tokens.tokens["live"] = time.Now().Add(time.Hour)
-	m.tokens.tokens["dead"] = time.Now().Add(-time.Hour)
+	m.tokens.tokens["live"] = tokenInfo{Expires: time.Now().Add(time.Hour)}
+	m.tokens.tokens["dead"] = tokenInfo{Expires: time.Now().Add(-time.Hour)}
 	m.tokens.pruneExpired()
 	if _, ok := m.tokens.tokens["dead"]; ok {
 		t.Error("expired token not pruned")

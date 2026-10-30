@@ -11,6 +11,7 @@ Great for web-applications that you want to access outside of your network also.
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup and periodically while running
 - Revoking tokens by editing the tokens file, without a restart
+- Optional pairing: a new device waits until it's approved on a device you already trust, with a page to see and revoke devices
 - Support for comments in the IP list file
 
 ## Security model
@@ -117,6 +118,8 @@ Use snippets to reuse configuration across multiple sites:
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
 | `max_age` | Token validity duration | `8760h` (1 year) |
+| `pairing` | Approve each new device by hand (see [Pairing](#pairing)) | off |
+| `pairing_path` | Where the pairing page lives on each site | `/.trusted-devices` |
 
 ### File Format
 
@@ -144,6 +147,33 @@ Lines that are neither an address nor a range are skipped with a warning in the 
 1. **Trusted IP Access**: Request from trusted IP → allows access; when it's a page load in a browser (`Sec-Fetch-Mode: navigate`, or a GET for HTML from a browser without fetch metadata), it also generates a token and sets the cookie
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
+
+## Pairing
+
+Without pairing, every device that opens the site from a trusted IP is trusted for a year: a guest's phone, the TV, a smart plug. With `pairing` on, a trusted IP only lets a device *ask*:
+
+```caddyfile
+example.com {
+    trusted_devices {
+        trusted_ips_file "/etc/caddy/trusted_ips.txt"
+        trusted_tokens_file "/var/lib/caddy/trusted_tokens.json"
+        pairing
+    }
+    reverse_proxy localhost:8080
+}
+```
+
+1. A new device opens the site on the trusted network and gets a page with a six-character code. It reloads by itself.
+2. On a device that's already approved, also on the trusted network, open `https://example.com/.trusted-devices`. The new device is listed with its code; give it a name and choose **Approve** (or **Reject**).
+3. The new device's page opens the site within a few seconds, and from then on it works anywhere, until `max_age` runs out.
+
+The same page lists the approved devices with when they were last used, and revokes one with **Revoke**.
+
+- **The first device** is approved by itself, as long as there are no valid tokens. So is the first one after emptying the tokens file.
+- **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.
+- **The code** only tells waiting devices apart; it isn't a secret. What's approved is the cookie the waiting device already has. A code expires after 15 minutes, and at most 20 devices wait at a time. Waiting devices are kept in memory, so a restart asks them to start again.
+- **Every request needs an approved token**, also from a trusted IP. Paths a browser fetches without cookies, such as a web app manifest, or that something outside your devices fetches, such as a calendar feed, need their own `handle` block without `trusted_devices`.
+- **Tokens with a name** are written as `{"expires": …, "name": …, "created": …, "last_seen": …}`. Tokens from before pairing keep the plain timestamp and keep working.
 
 ## Revoking access
 

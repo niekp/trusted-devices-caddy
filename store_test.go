@@ -124,7 +124,7 @@ func TestOwnSaveIsNotReadBackAsAnEdit(t *testing.T) {
 	s := newLoadedStore(t)
 	token := s.issue(time.Hour)
 	s.mu.Lock()
-	s.tokens["only-in-memory"] = time.Now().Add(time.Hour)
+	s.tokens["only-in-memory"] = tokenInfo{Expires: time.Now().Add(time.Hour)}
 	s.lastCheck = time.Time{}
 	s.mu.Unlock()
 	if !s.isValid("only-in-memory") || !s.isValid(token) {
