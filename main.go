@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -31,6 +32,9 @@ type Middleware struct {
 	TrustedTokensFile string `json:"trusted_tokens_file,omitempty"`
 	CookieName        string `json:"cookie_name,omitempty"`
 	MaxAge            string `json:"max_age,omitempty"`
+	// Pairing makes a new device on a trusted IP wait for approval on an approved device, instead of trusting it.
+	Pairing     bool   `json:"pairing,omitempty"`
+	PairingPath string `json:"pairing_path,omitempty"`
 
 	trustedIPs ipList
 	tokens     *tokenStore
@@ -61,6 +65,9 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	}
 	if m.MaxAge == "" {
 		m.MaxAge = "8760h" // 1 year
+	}
+	if m.PairingPath == "" {
+		m.PairingPath = "/.trusted-devices"
 	}
 
 	var err error
@@ -109,11 +116,17 @@ func (m *Middleware) Validate() error {
 	if m.maxAge <= 0 {
 		return fmt.Errorf("max_age must be positive")
 	}
+	if !strings.HasPrefix(m.PairingPath, "/") || strings.HasSuffix(m.PairingPath, "/") {
+		return fmt.Errorf("pairing_path must start with / and not end with one")
+	}
 	return nil
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	if m.Pairing {
+		return m.servePairing(w, r, next)
+	}
 	isTrustedIP := m.trustedIPs.contains(getClientIP(r))
 
 	cookie, err := r.Cookie(m.CookieName)
@@ -180,6 +193,15 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 			case "max_age":
 				if !d.Args(&m.MaxAge) {
+					return d.ArgErr()
+				}
+			case "pairing":
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Pairing = true
+			case "pairing_path":
+				if !d.Args(&m.PairingPath) {
 					return d.ArgErr()
 				}
 			default:
