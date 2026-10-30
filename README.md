@@ -171,22 +171,37 @@ example.com {
 
 The same page lists the approved devices with when they were last used, and revokes one with **Revoke**.
 
-- **The first device** is approved by itself, as long as there are no valid tokens. So is the first one after emptying the tokens file, or after every token expired. Not while the tokens file can't be parsed: its tokens only look absent then, so new devices wait for an approval that can only come once the file is fixed.
+- **The first device** is approved by itself, as long as there's no valid paired token. So is the first one after replacing the tokens file with `{}`, or after every paired device went unused for `max_age`: do that only when no guest is on the network. Not while the tokens file is missing or can't be parsed, since its tokens may only look absent then.
 - **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.
 - **The code** only tells waiting devices apart; it isn't a secret. What's approved is the cookie the waiting device already has. A code expires after 15 minutes, and at most 20 devices wait at a time. Waiting devices are kept in memory, so a restart asks them to start again.
-- **Every request needs an approved token**, also from a trusted IP. Paths a browser fetches without cookies, such as a web app manifest, or that something outside your devices fetches, such as a calendar feed, need their own `handle` block without `trusted_devices`.
-- **Tokens with a name** are written as `{"expires": …, "name": …, "created": …, "last_seen": …}`. Tokens from before pairing keep the plain timestamp and keep working.
+- **Every request needs an approved token**, also from a trusted IP. Paths a browser fetches without cookies, such as a web app manifest, or that something outside your devices fetches, such as a calendar feed, need their own `handle` block without `trusted_devices`:
+
+  ```caddyfile
+  example.com {
+      handle /manifest.webmanifest {
+          reverse_proxy localhost:8080
+      }
+      handle {
+          trusted_devices {
+              # …
+              pairing
+          }
+          reverse_proxy localhost:8080
+      }
+  }
+  ```
+- **Paired tokens** are written as `{"expires": …, "paired": true, "name": …, "created": …, "last_seen": …}`. Only those count where pairing is on. Tokens from before pairing, or from a site without pairing that uses the same tokens file, keep their plain timestamp and keep working there, but not where pairing is on: turning pairing on means pairing each device once (the first by itself).
 
 ## Revoking access
 
 Edit `trusted_tokens.json` while Caddy runs; there's no need to restart or reload:
 
 - **One device**: remove its entry. Without pairing, tokens carry no device name, so if you can't tell which one it is, revoke them all. With pairing, each entry has the name it was approved with, and **Revoke** on the pairing page does the same.
-- **All devices**: replace the contents with `{}`, or delete the file.
+- **All devices**: replace the contents with `{}`.
 
 Caddy checks the file for changes at most once a second and on every new token, so a revoked token stops working within a second and isn't written back. Without pairing, a device on a trusted IP gets a new token on its next page load; with pairing, it has to be approved again.
 
-If the file can't be parsed (a typo while editing), every token is denied and Caddy won't overwrite the file until it's valid JSON again; the log says `failed to parse tokens file`.
+While the file is missing or can't be parsed, Caddy keeps the tokens it had and doesn't write the file. Editors often leave it like that for a moment while saving, and that mustn't lock everyone out. So deleting the file doesn't revoke anything until Caddy restarts, and a typo means your change doesn't take effect: the log then says `failed to parse tokens file` or `tokens file is missing`.
 
 ## Troubleshooting
 

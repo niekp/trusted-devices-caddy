@@ -58,30 +58,39 @@ func newCode() string {
 	return string(b)
 }
 
-// addFirstDevice approves a device right away when no token is valid yet, so the first device can approve the
-// others. Checking and adding happen under one lock, so two devices at once can't both become the first. It refuses
-// while the tokens file can't be parsed: its tokens only look absent then.
+// isPaired reports whether token was approved through pairing and has not expired.
+func (s *tokenStore) isPaired(token string) bool {
+	s.refresh()
+	s.mu.RLock()
+	info, exists := s.tokens[token]
+	s.mu.RUnlock()
+	return exists && info.Paired && time.Now().Before(info.Expires)
+}
+
+// addFirstDevice approves a device right away when no paired token is valid yet, so the first device can approve
+// the others. Checking and adding happen in one step, so two devices at once can't both become the first. It
+// refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then.
 func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, bool) {
-	now := time.Now()
-	s.mu.Lock()
-	s.syncLocked()
-	if s.broken {
-		s.mu.Unlock()
-		return "", false
-	}
-	for _, info := range s.tokens {
-		if now.Before(info.Expires) {
-			s.mu.Unlock()
-			return "", false
-		}
-	}
 	token := uuid.New().String()
-	s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Name: name, Created: now, LastSeen: now}
-	s.mu.Unlock()
-	if err := s.save(); err != nil {
+	added := false
+	err := s.update(func() bool {
+		if s.unreadable {
+			return false
+		}
+		now := time.Now()
+		for _, info := range s.tokens {
+			if info.Paired && now.Before(info.Expires) {
+				return false
+			}
+		}
+		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Created: now, LastSeen: now}
+		added = true
+		return true
+	})
+	if err != nil {
 		s.logger.Error("failed to save token", zap.Error(err))
 	}
-	return token, true
+	return token, added
 }
 
 // startPairing creates a token that's not valid yet, and the code an admin approves it with.
@@ -143,25 +152,22 @@ func (s *tokenStore) pendingList() []pendingDevice {
 
 // approve turns the waiting device with code into an approved one.
 func (s *tokenStore) approve(code, name string, maxAge time.Duration) bool {
-	now := time.Now()
-	s.mu.Lock()
-	s.prunePendingLocked(now)
-	token, found := "", false
-	for t, p := range s.pending {
-		if p.Code == code {
-			token, found = t, true
+	found := false
+	err := s.update(func() bool {
+		now := time.Now()
+		s.prunePendingLocked(now)
+		for token, p := range s.pending {
+			if p.Code == code {
+				delete(s.pending, token)
+				s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Created: now, LastSeen: now}
+				found = true
+				return true
+			}
 		}
-	}
-	if found {
-		delete(s.pending, token)
-		s.syncLocked()
-		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Name: name, Created: now, LastSeen: now}
-	}
-	s.mu.Unlock()
-	if found {
-		if err := s.save(); err != nil {
-			s.logger.Error("failed to save token", zap.Error(err))
-		}
+		return false
+	})
+	if err != nil {
+		s.logger.Error("failed to save token", zap.Error(err))
 	}
 	return found
 }
@@ -179,27 +185,25 @@ func (s *tokenStore) reject(code string) bool {
 	return false
 }
 
-// revoke removes the approved device with id.
+// revoke removes the paired device with id.
 func (s *tokenStore) revoke(id string) bool {
-	s.mu.Lock()
-	s.syncLocked()
 	found := false
-	for t := range s.tokens {
-		if deviceID(t) == id {
-			delete(s.tokens, t)
-			found = true
+	err := s.update(func() bool {
+		for token, info := range s.tokens {
+			if info.Paired && deviceID(token) == id {
+				delete(s.tokens, token)
+				found = true
+			}
 		}
-	}
-	s.mu.Unlock()
-	if found {
-		if err := s.save(); err != nil {
-			s.logger.Error("failed to save tokens after revoking", zap.Error(err))
-		}
+		return found
+	})
+	if err != nil {
+		s.logger.Error("failed to save tokens after revoking", zap.Error(err))
 	}
 	return found
 }
 
-// devices returns the approved devices, most recently used first.
+// devices returns the paired devices, most recently used first.
 func (s *tokenStore) devices(current string) []device {
 	s.refresh()
 	s.mu.RLock()
@@ -207,7 +211,7 @@ func (s *tokenStore) devices(current string) []device {
 	now := time.Now()
 	list := make([]device, 0, len(s.tokens))
 	for t, info := range s.tokens {
-		if now.Before(info.Expires) {
+		if info.Paired && now.Before(info.Expires) {
 			list = append(list, device{
 				ID: deviceID(t), Name: info.Name, Created: info.Created, LastSeen: info.LastSeen,
 				Expires: info.Expires, Current: t == current,
@@ -219,27 +223,30 @@ func (s *tokenStore) devices(current string) []device {
 }
 
 // touch records that token was used and extends it by maxAge from now, so a device in use never expires and devices
-// paired on the same day don't all expire at once. It writes the file at most once per lastSeenResolution per device.
-func (s *tokenStore) touch(token string, maxAge time.Duration) {
-	now := time.Now()
-	s.mu.Lock()
+// paired on the same day don't all expire at once. It does so at most once per lastSeenResolution per device, and
+// reports whether it did, so the cookie can be renewed with it.
+func (s *tokenStore) touch(token string, maxAge time.Duration) bool {
+	s.mu.RLock()
 	info, ok := s.tokens[token]
-	changed := ok && now.Sub(info.LastSeen) >= lastSeenResolution
-	if changed {
-		// Read hand edits first, so writing the last use doesn't bring a revoked token back.
-		s.syncLocked()
-		info, ok = s.tokens[token]
-		changed = ok
+	s.mu.RUnlock()
+	if !ok || time.Since(info.LastSeen) < lastSeenResolution {
+		return false
 	}
-	if changed {
-		info.LastSeen = now
-		info.Expires = now.Add(maxAge)
-		s.tokens[token] = info
-	}
-	s.mu.Unlock()
-	if changed {
-		if err := s.save(); err != nil {
-			s.logger.Error("failed to save last use", zap.Error(err))
+	renewed := false
+	err := s.update(func() bool {
+		// Read again: the file may have changed, and another request may have just done this.
+		info, ok := s.tokens[token]
+		now := time.Now()
+		if !ok || !info.Paired || now.Sub(info.LastSeen) < lastSeenResolution {
+			return false
 		}
+		info.LastSeen, info.Expires = now, now.Add(maxAge)
+		s.tokens[token] = info
+		renewed = true
+		return true
+	})
+	if err != nil {
+		s.logger.Error("failed to save last use", zap.Error(err))
 	}
+	return renewed
 }

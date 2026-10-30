@@ -22,7 +22,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	if c, err := r.Cookie(m.CookieName); err == nil {
 		token = c.Value
 	}
-	approved := token != "" && m.tokens.isValid(token)
+	approved := token != "" && m.tokens.isPaired(token)
 
 	if r.URL.Path == m.PairingPath || strings.HasPrefix(r.URL.Path, m.PairingPath+"/") {
 		if approved && trusted {
@@ -33,7 +33,9 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 		}
 	}
 	if approved {
-		m.tokens.touch(token, m.maxAge)
+		if m.tokens.touch(token, m.maxAge) {
+			m.setCookie(w, r, token) // the browser's copy expires too, so it's extended along with the token
+		}
 		return next.ServeHTTP(w, r)
 	}
 	if !isNavigation(r) {

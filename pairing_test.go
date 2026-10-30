@@ -321,63 +321,149 @@ func TestCaddyfilePairingOptions(t *testing.T) {
 	}
 }
 
-func TestBrokenTokensFileDoesNotApproveByItself(t *testing.T) {
+// A tokens file that can't be read at startup holds paired devices the store just can't see; nobody may become the
+// first device then.
+func TestUnreadableTokensFileDoesNotApproveByItself(t *testing.T) {
 	m := newPairingMiddleware(t)
-	pairFirstDevice(t, m)
-	editTokensFile(t, m.tokens, `{"half-edited": `)
+	if err := os.WriteFile(m.tokens.path, []byte(`{"half-edited": `), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.tokens.load()
 	rec, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil))
 	if called {
-		t.Fatal("a new device was approved by itself while the tokens file was broken")
+		t.Fatal("a new device was approved by itself while the tokens file couldn't be parsed")
 	}
 	codeIn(t, rec)
+}
+
+func TestDeletedTokensFileDoesNotApproveByItself(t *testing.T) {
+	m := newPairingMiddleware(t)
+	admin := pairFirstDevice(t, m)
+	if err := os.Remove(m.tokens.path); err != nil {
+		t.Fatal(err)
+	}
+	m.tokens.lastCheck.Store(0)
+	if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil)); called {
+		t.Fatal("a new device was approved by itself after the tokens file was deleted")
+	}
+	if _, called := serve(t, m, pairingReq(away, http.MethodGet, "/", admin, nil)); !called {
+		t.Fatal("deleting the tokens file locked out an approved device")
+	}
 }
 
 func TestOnlyOneFirstDevice(t *testing.T) {
 	m := newPairingMiddleware(t)
 	var through atomic.Int32
 	var wg sync.WaitGroup
+	errs := make(chan error, 20)
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil)); called {
+			next := &okHandler{}
+			err := m.ServeHTTP(httptest.NewRecorder(), pairingReq(home, http.MethodGet, "/", "", nil), caddyhttp.HandlerFunc(next.ServeHTTP))
+			if err != nil {
+				errs <- err
+			}
+			if next.called {
 				through.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
 	if n := through.Load(); n != 1 {
 		t.Fatalf("%d devices approved by themselves, want 1", n)
 	}
 }
 
-func TestUseExtendsExpiry(t *testing.T) {
-	m := newPairingMiddleware(t)
-	token := pairFirstDevice(t, m)
-	old := time.Now().Add(-2 * lastSeenResolution)
+// ageToken makes token look last used long ago, with expiry close.
+func ageToken(m *Middleware, token string) {
 	m.tokens.mu.Lock()
 	info := m.tokens.tokens[token]
-	info.LastSeen, info.Expires = old, time.Now().Add(time.Minute)
+	info.LastSeen, info.Expires = time.Now().Add(-2*lastSeenResolution), time.Now().Add(time.Minute)
 	m.tokens.tokens[token] = info
 	m.tokens.mu.Unlock()
+}
 
-	serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
+func TestUseExtendsTokenAndCookie(t *testing.T) {
+	m := newPairingMiddleware(t)
+	token := pairFirstDevice(t, m)
+	ageToken(m, token)
+
+	rec, called := serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
+	if !called {
+		t.Fatal("device denied")
+	}
 	if expires := readTokensFile(t, m.tokens.path)[token].Expires; time.Until(expires) < m.maxAge-time.Minute {
 		t.Fatalf("expiry not extended on use: %v", expires)
 	}
+	if cookieOf(t, rec) != token || rec.Result().Cookies()[0].MaxAge != int(m.maxAge.Seconds()) {
+		t.Fatal("cookie not renewed along with the token")
+	}
 }
 
-func TestUseWithinAnHourDoesNotWrite(t *testing.T) {
+func TestUseWithinAnHourWritesNothing(t *testing.T) {
 	m := newPairingMiddleware(t)
 	token := pairFirstDevice(t, m)
-	before, err := os.Stat(m.tokens.path)
-	if err != nil {
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(m.tokens.path, past, past); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
-	serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
-	after, _ := os.Stat(m.tokens.path)
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Fatal("tokens file written on every use")
+	m.tokens.lastCheck.Store(0)
+	rec, _ := serve(t, m, pairingReq(away, http.MethodGet, "/", token, nil))
+	if info, _ := os.Stat(m.tokens.path); !info.ModTime().Equal(past) {
+		t.Fatal("tokens file written on a use within the hour")
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("cookie renewed on a use within the hour")
+	}
+}
+
+// A site without pairing that shares the tokens file hands out tokens to anything on a trusted IP; those must not
+// get past a site with pairing.
+func TestUnpairedTokenNotAcceptedWithPairing(t *testing.T) {
+	plain := newMiddleware(t)
+	paired := newPairingMiddleware(t)
+	paired.tokens = plain.tokens
+	pairFirstDevice(t, paired)
+
+	rec, _ := serve(t, plain, pairingReq(home, http.MethodGet, "/", "", nil))
+	guest := cookieOf(t, rec)
+	if _, called := serve(t, paired, pairingReq(away, http.MethodGet, "/", guest, nil)); called {
+		t.Fatal("token from a site without pairing got past pairing")
+	}
+	if _, called := serve(t, paired, pairingReq(home, http.MethodGet, admin, guest, nil)); called {
+		t.Fatal("token from a site without pairing reached the admin page")
+	}
+}
+
+// Turning pairing on for an existing tokens file: the old tokens stay as they are, and the first device to pair
+// becomes the first approved one.
+func TestTurningPairingOnKeepsOldTokensUntouched(t *testing.T) {
+	m := newPairingMiddleware(t)
+	m.tokens.load()
+	old := m.tokens.issue(time.Hour)
+
+	if _, called := serve(t, m, pairingReq(away, http.MethodGet, "/", old, nil)); called {
+		t.Fatal("token from before pairing let through with pairing on")
+	}
+	first := pairFirstDevice(t, m)
+	ageToken(m, first)
+	serve(t, m, pairingReq(away, http.MethodGet, "/", first, nil))
+
+	data, _ := os.ReadFile(m.tokens.path)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(raw[old]), `"`) {
+		t.Fatalf("token from before pairing rewritten: %s", raw[old])
+	}
+	if strings.Contains(string(data), "0001-01-01") {
+		t.Fatal("zero times written to the tokens file")
 	}
 }
