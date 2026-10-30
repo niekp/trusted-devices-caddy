@@ -15,6 +15,9 @@ import (
 
 const cleanupInterval = time.Hour
 
+// reloadCheckInterval limits how often a request checks the tokens file for changes made by hand.
+const reloadCheckInterval = time.Second
+
 // tokenStores shares one store per tokens file across all handler instances and config reloads.
 var tokenStores = caddy.NewUsagePool()
 
@@ -26,6 +29,15 @@ type tokenStore struct {
 	saveMu      sync.Mutex // serializes writes to the tokens file
 	stopCleanup chan struct{}
 	logger      *zap.Logger
+
+	// What the tokens file looked like when it was last read or written, so a change made by hand (removing a
+	// token, emptying or deleting the file) is picked up without a restart and not overwritten by the next save.
+	fileSeen  bool
+	fileMod   time.Time
+	fileSize  int64
+	lastCheck time.Time
+	// broken is set while the tokens file can't be parsed: no token is valid, and saving won't overwrite the file.
+	broken bool
 }
 
 // acquireTokenStore returns the shared store for path, loading it from disk on first use.
@@ -64,25 +76,70 @@ func (s *tokenStore) Destruct() error {
 
 // load reads the tokens file, dropping expired tokens.
 func (s *tokenStore) load() {
-	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastCheck = time.Now()
+	if _, err := os.Stat(s.path); os.IsNotExist(err) {
 		s.logger.Info("tokens file does not exist yet, will be created on first use", zap.String("file", s.path))
 		return
 	}
+	s.syncLocked()
+}
+
+// refresh picks up changes to the tokens file, at most once per reloadCheckInterval.
+func (s *tokenStore) refresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if now := time.Now(); now.Sub(s.lastCheck) >= reloadCheckInterval {
+		s.lastCheck = now
+		s.syncLocked()
+	}
+}
+
+// syncLocked replaces the tokens in memory with the file's when the file changed since it was last read or
+// written. A deleted file revokes every token; a file that can't be parsed makes every token invalid until it's
+// fixed. The caller holds s.mu.
+func (s *tokenStore) syncLocked() {
+	info, err := os.Stat(s.path)
+	if os.IsNotExist(err) {
+		if s.fileSeen {
+			s.logger.Info("tokens file removed, revoking all tokens", zap.String("file", s.path))
+			s.tokens = make(map[string]time.Time)
+			s.fileSeen = false
+			s.broken = false
+		}
+		return
+	}
+	if err != nil {
+		s.logger.Warn("could not check tokens file", zap.String("file", s.path), zap.Error(err))
+		return
+	}
+	if s.fileSeen && info.ModTime().Equal(s.fileMod) && info.Size() == s.fileSize {
+		return
+	}
+	s.fileSeen, s.fileMod, s.fileSize = true, info.ModTime(), info.Size()
+
+	data, err := os.ReadFile(s.path)
 	if err != nil {
 		s.logger.Warn("could not load tokens file", zap.String("file", s.path), zap.Error(err))
 		return
 	}
-	if err := json.Unmarshal(data, &s.tokens); err != nil {
-		s.logger.Error("failed to parse tokens file", zap.String("file", s.path), zap.Error(err))
+	tokens := make(map[string]time.Time)
+	if err := json.Unmarshal(data, &tokens); err != nil {
+		s.logger.Error("failed to parse tokens file, denying all tokens until it is fixed", zap.String("file", s.path), zap.Error(err))
+		s.tokens = make(map[string]time.Time)
+		s.broken = true
 		return
 	}
+	s.tokens = tokens
+	s.broken = false
 	s.removeExpired(time.Now())
 	s.logger.Info("loaded trusted tokens", zap.Int("count", len(s.tokens)), zap.String("file", s.path))
 }
 
 // isValid reports whether token exists and has not expired.
 func (s *tokenStore) isValid(token string) bool {
+	s.refresh()
 	s.mu.RLock()
 	expiry, exists := s.tokens[token]
 	s.mu.RUnlock()
@@ -94,6 +151,7 @@ func (s *tokenStore) issue(maxAge time.Duration) string {
 	token := uuid.New().String()
 
 	s.mu.Lock()
+	s.syncLocked()
 	s.tokens[token] = time.Now().Add(maxAge)
 	s.mu.Unlock()
 
@@ -120,6 +178,7 @@ func (s *tokenStore) cleanupLoop(interval time.Duration) {
 // pruneExpired removes expired tokens from memory and persists the result.
 func (s *tokenStore) pruneExpired() {
 	s.mu.Lock()
+	s.syncLocked()
 	changed := s.removeExpired(time.Now())
 	s.mu.Unlock()
 
@@ -148,9 +207,13 @@ func (s *tokenStore) save() error {
 	defer s.saveMu.Unlock()
 
 	s.mu.RLock()
+	broken := s.broken
 	data, err := json.MarshalIndent(s.tokens, "", "  ")
 	count := len(s.tokens)
 	s.mu.RUnlock()
+	if broken {
+		return fmt.Errorf("tokens file %s can't be parsed, not overwriting it", s.path)
+	}
 	if err != nil {
 		return fmt.Errorf("marshaling tokens: %w", err)
 	}
@@ -176,6 +239,11 @@ func (s *tokenStore) save() error {
 	}
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("renaming tokens file: %w", err)
+	}
+	if info, err := os.Stat(s.path); err == nil {
+		s.mu.Lock()
+		s.fileSeen, s.fileMod, s.fileSize = true, info.ModTime(), info.Size()
+		s.mu.Unlock()
 	}
 
 	s.logger.Debug("saved tokens to file", zap.String("file", s.path), zap.Int("count", count))

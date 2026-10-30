@@ -10,6 +10,7 @@ Great for web-applications that you want to access outside of your network also.
 - Automatic token generation and persistent cookie creation
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup and periodically while running
+- Revoking tokens by editing the tokens file, without a restart
 - Support for comments in the IP list file
 
 ## Security model
@@ -139,6 +140,17 @@ Use snippets to reuse configuration across multiple sites:
 1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
+
+## Revoking access
+
+Edit `trusted_tokens.json` while Caddy runs; there's no need to restart or reload:
+
+- **One device**: remove its line. Tokens carry no device name, so if you can't tell which one it is, revoke them all.
+- **All devices**: replace the contents with `{}`, or delete the file.
+
+Caddy checks the file for changes at most once a second and on every new token, so a revoked token stops working within a second and isn't written back. A device on a trusted IP gets a new token on its next page load.
+
+If the file can't be parsed (a typo while editing), every token is denied and Caddy won't overwrite the file until it's valid JSON again; the log says `failed to parse tokens file`.
 
 ## Troubleshooting
 
