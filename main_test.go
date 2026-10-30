@@ -46,7 +46,7 @@ func newMiddleware(t *testing.T) *Middleware {
 		TrustedTokensFile: path,
 		CookieName:        "trusted_device",
 		maxAge:            8760 * time.Hour,
-		trustedIPs:        map[string]bool{"192.168.1.100": true},
+		trustedIPs:        mustParseIPList("192.168.1.100"),
 		tokens:            newTokenStore(path, zap.NewNop()),
 		logger:            zap.NewNop(),
 	}
@@ -162,7 +162,7 @@ func TestUserAgentNoLongerGrantsAccess(t *testing.T) {
 
 func TestEmptyTrustedIPsFailsClosed(t *testing.T) {
 	m := newMiddleware(t)
-	m.trustedIPs = map[string]bool{} // no trusted IPs loaded
+	m.trustedIPs = nil // no trusted IPs loaded
 	r := newReq("192.168.1.100", nil)
 	_, called := serve(t, m, r)
 	if called {
