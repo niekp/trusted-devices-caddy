@@ -169,7 +169,7 @@ example.com {
 
 The same page lists the approved devices with when they were last used, and revokes one with **Revoke**.
 
-- **The first device** is approved by itself, as long as there are no valid tokens. So is the first one after emptying the tokens file.
+- **The first device** is approved by itself, as long as there are no valid tokens. So is the first one after emptying the tokens file, or after every token expired. Not while the tokens file can't be parsed: its tokens only look absent then, so new devices wait for an approval that can only come once the file is fixed.
 - **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.
 - **The code** only tells waiting devices apart; it isn't a secret. What's approved is the cookie the waiting device already has. A code expires after 15 minutes, and at most 20 devices wait at a time. Waiting devices are kept in memory, so a restart asks them to start again.
 - **Every request needs an approved token**, also from a trusted IP. Paths a browser fetches without cookies, such as a web app manifest, or that something outside your devices fetches, such as a calendar feed, need their own `handle` block without `trusted_devices`.

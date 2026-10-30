@@ -58,32 +58,30 @@ func newCode() string {
 	return string(b)
 }
 
-// hasDevices reports whether any token is valid; until one is, the first device to pair is approved by itself.
-func (s *tokenStore) hasDevices() bool {
-	s.refresh()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	now := time.Now()
-	for _, info := range s.tokens {
-		if now.Before(info.Expires) {
-			return true
-		}
-	}
-	return false
-}
-
-// addDevice approves a new token right away.
-func (s *tokenStore) addDevice(name string, maxAge time.Duration) string {
-	token := uuid.New().String()
+// addFirstDevice approves a device right away when no token is valid yet, so the first device can approve the
+// others. Checking and adding happen under one lock, so two devices at once can't both become the first. It refuses
+// while the tokens file can't be parsed: its tokens only look absent then.
+func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, bool) {
 	now := time.Now()
 	s.mu.Lock()
 	s.syncLocked()
+	if s.broken {
+		s.mu.Unlock()
+		return "", false
+	}
+	for _, info := range s.tokens {
+		if now.Before(info.Expires) {
+			s.mu.Unlock()
+			return "", false
+		}
+	}
+	token := uuid.New().String()
 	s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Name: name, Created: now, LastSeen: now}
 	s.mu.Unlock()
 	if err := s.save(); err != nil {
 		s.logger.Error("failed to save token", zap.Error(err))
 	}
-	return token
+	return token, true
 }
 
 // startPairing creates a token that's not valid yet, and the code an admin approves it with.

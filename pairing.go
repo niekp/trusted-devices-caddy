@@ -2,6 +2,7 @@ package trusteddevices
 
 import (
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -45,9 +46,9 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 		return deny(w, "Access denied")
 	}
 
-	if !m.tokens.hasDevices() {
-		name := deviceName(r.UserAgent())
-		m.setCookie(w, r, m.tokens.addDevice(name, m.maxAge))
+	name := deviceName(r.UserAgent())
+	if first, ok := m.tokens.addFirstDevice(name, m.maxAge); ok {
+		m.setCookie(w, r, first)
 		m.logger.Info("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
 		return next.ServeHTTP(w, r)
 	}
@@ -195,11 +196,14 @@ func (m *Middleware) renderAdmin(w http.ResponseWriter, token string) error {
 }
 
 func ago(t time.Time) string {
-	d := time.Since(t).Round(time.Minute)
-	if d < time.Minute {
+	switch d := time.Since(t); {
+	case d < time.Minute:
 		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%d h ago", int(d.Hours()))
 	}
-	return strings.TrimSuffix(d.String(), "0s") + " ago"
 }
 
 const pageStyle = `<meta name="viewport" content="width=device-width, initial-scale=1">

@@ -9,6 +9,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -277,8 +279,8 @@ func TestPendingExpires(t *testing.T) {
 
 func TestTokensFileKeepsOldFormatAndReadsNew(t *testing.T) {
 	s := newLoadedStore(t)
+	named, _ := s.addFirstDevice("Kitchen tablet", time.Hour)
 	plain := s.issue(time.Hour)
-	named := s.addDevice("Kitchen tablet", time.Hour)
 
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -316,5 +318,35 @@ func TestCaddyfilePairingOptions(t *testing.T) {
 	}
 	if err := m.UnmarshalCaddyfile(caddyfile.NewTestDispenser("trusted_devices {\n pairing yes\n}")); err == nil {
 		t.Fatal("pairing with an argument accepted")
+	}
+}
+
+func TestBrokenTokensFileDoesNotApproveByItself(t *testing.T) {
+	m := newPairingMiddleware(t)
+	pairFirstDevice(t, m)
+	editTokensFile(t, m.tokens, `{"half-edited": `)
+	rec, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil))
+	if called {
+		t.Fatal("a new device was approved by itself while the tokens file was broken")
+	}
+	codeIn(t, rec)
+}
+
+func TestOnlyOneFirstDevice(t *testing.T) {
+	m := newPairingMiddleware(t)
+	var through atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil)); called {
+				through.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := through.Load(); n != 1 {
+		t.Fatalf("%d devices approved by themselves, want 1", n)
 	}
 }
