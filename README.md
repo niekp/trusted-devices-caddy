@@ -148,6 +148,8 @@ Lines that are neither an address nor a range are skipped with a warning in the 
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
 
+Only browsers get a token, on a page load. Apps and scripts on a trusted IP are let through there but get no cookie, so they can't reach the site from elsewhere; this plugin is for websites opened in a browser (see *Doesn't support*).
+
 ## Pairing
 
 Without pairing, every device that opens the site from a trusted IP is trusted for a year: a guest's phone, the TV, a smart plug. With `pairing` on, a trusted IP only lets a device *ask*:
