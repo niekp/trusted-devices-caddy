@@ -122,6 +122,9 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 	if hasValidCookie {
 		return next.ServeHTTP(w, r)
 	}
+	if isTrustedIP && !isNavigation(r) {
+		return next.ServeHTTP(w, r)
+	}
 	if isTrustedIP {
 		http.SetCookie(w, &http.Cookie{
 			Name:     m.CookieName,

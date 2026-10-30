@@ -140,9 +140,11 @@ Lines that are neither an address nor a range are skipped with a warning in the 
 
 ## How It Works
 
-1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
+1. **Trusted IP Access**: Request from trusted IP → allows access; when it's a page load in a browser (`Sec-Fetch-Mode: navigate`, or a GET for HTML from a browser without fetch metadata), it also generates a token and sets the cookie
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
+
+Only browsers get a token, on a page load. Apps and scripts on a trusted IP are let through there but get no cookie, so they can't reach the site from elsewhere; this plugin is for websites opened in a browser (see *Doesn't support*).
 
 ## Troubleshooting
 
