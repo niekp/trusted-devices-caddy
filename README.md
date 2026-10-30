@@ -133,7 +133,7 @@ Use snippets to reuse configuration across multiple sites:
 2001:db8:1234::/64
 ```
 
-Lines that are neither an address nor a range are skipped with a warning in the log.
+Lines that are neither an address nor a range are skipped with a warning in the log. A range with host bits set (`10.0.0.5/24`) trusts the whole range (`10.0.0.0/24`), and `/0` trusts every address; both are logged as a warning too, since they're usually a typo.
 
 **trusted_tokens.json** (auto-managed):
 ```json
