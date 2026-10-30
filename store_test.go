@@ -22,7 +22,7 @@ func editTokensFile(t *testing.T, s *tokenStore, content string) {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
-	s.lastCheck = time.Time{}
+	s.lastCheck.Store(0)
 	s.mu.Unlock()
 }
 
@@ -74,15 +74,26 @@ func TestRemovingOneTokenKeepsTheOthers(t *testing.T) {
 	}
 }
 
-func TestDeletingTokensFileRevokesAll(t *testing.T) {
+// An editor that saves by moving the old file aside leaves a moment without one; that must not revoke anything, nor
+// may a save in that moment write the old set back.
+func TestMissingTokensFileKeepsTokensAndIsNotRecreated(t *testing.T) {
 	s := newLoadedStore(t)
 	token := s.issue(time.Hour)
 	if err := os.Remove(s.path); err != nil {
 		t.Fatal(err)
 	}
-	s.lastCheck = time.Time{}
+	s.lastCheck.Store(0)
+	if !s.isValid(token) {
+		t.Fatal("token revoked while the tokens file was briefly missing")
+	}
+	s.issue(time.Hour)
+	if _, err := os.Stat(s.path); !os.IsNotExist(err) {
+		t.Fatal("a save recreated the tokens file while it was missing")
+	}
+
+	editTokensFile(t, s, "{}")
 	if s.isValid(token) {
-		t.Fatal("token still valid after deleting the tokens file")
+		t.Fatal("token still valid after the file came back empty")
 	}
 }
 
@@ -101,22 +112,45 @@ func TestNextIssueKeepsHandEdits(t *testing.T) {
 	}
 }
 
-func TestBrokenTokensFileDeniesAndIsNotOverwritten(t *testing.T) {
+// An editor that empties the file before writing it leaves a moment where it can't be parsed; tokens must survive
+// that, and nothing may be written over the file until it's whole again.
+func TestUnparsableTokensFileKeepsTokensAndIsNotOverwritten(t *testing.T) {
 	s := newLoadedStore(t)
 	token := s.issue(time.Hour)
-	editTokensFile(t, s, `{"half-edited": `)
-	if s.isValid(token) {
-		t.Fatal("token valid while the tokens file can't be parsed")
-	}
-	s.issue(time.Hour)
-	if data, _ := os.ReadFile(s.path); string(data) != `{"half-edited": ` {
-		t.Fatalf("broken tokens file was overwritten: %s", data)
+	for _, content := range []string{"", `{"half-edited": `} {
+		editTokensFile(t, s, content)
+		if !s.isValid(token) {
+			t.Fatalf("token revoked while the tokens file read %q", content)
+		}
+		s.issue(time.Hour)
+		if data, _ := os.ReadFile(s.path); string(data) != content {
+			t.Fatalf("tokens file was overwritten: %s", data)
+		}
 	}
 
 	editTokensFile(t, s, "{}")
+	if s.isValid(token) {
+		t.Fatal("token still valid after the file was fixed without it")
+	}
 	fresh := s.issue(time.Hour)
 	if _, ok := readTokensFile(t, s.path)[fresh]; !ok {
 		t.Fatal("saving didn't resume after the file was fixed")
+	}
+}
+
+func TestEditDuringAnotherSaveIsKept(t *testing.T) {
+	s := newLoadedStore(t)
+	revoked := s.issue(time.Hour)
+	// The file changes between a request reading it and a new token being written.
+	s.update(func() bool {
+		later := time.Now().Add(time.Minute)
+		os.WriteFile(s.path, []byte("{}"), 0600)
+		os.Chtimes(s.path, later, later)
+		return false
+	})
+	s.issue(time.Hour)
+	if _, ok := readTokensFile(t, s.path)[revoked]; ok {
+		t.Fatal("a save wrote a revoked token back")
 	}
 }
 
@@ -125,7 +159,7 @@ func TestOwnSaveIsNotReadBackAsAnEdit(t *testing.T) {
 	token := s.issue(time.Hour)
 	s.mu.Lock()
 	s.tokens["only-in-memory"] = time.Now().Add(time.Hour)
-	s.lastCheck = time.Time{}
+	s.lastCheck.Store(0)
 	s.mu.Unlock()
 	if !s.isValid("only-in-memory") || !s.isValid(token) {
 		t.Fatal("an unchanged tokens file replaced the tokens in memory")

@@ -146,11 +146,11 @@ Use snippets to reuse configuration across multiple sites:
 Edit `trusted_tokens.json` while Caddy runs; there's no need to restart or reload:
 
 - **One device**: remove its line. Tokens carry no device name, so if you can't tell which one it is, revoke them all.
-- **All devices**: replace the contents with `{}`, or delete the file.
+- **All devices**: replace the contents with `{}`.
 
 Caddy checks the file for changes at most once a second and on every new token, so a revoked token stops working within a second and isn't written back. A device on a trusted IP gets a new token on its next page load.
 
-If the file can't be parsed (a typo while editing), every token is denied and Caddy won't overwrite the file until it's valid JSON again; the log says `failed to parse tokens file`.
+While the file is missing or can't be parsed, Caddy keeps the tokens it had and doesn't write the file. Editors often leave it like that for a moment while saving, and that mustn't lock everyone out. So deleting the file doesn't revoke anything until Caddy restarts, and a typo means your change doesn't take effect: the log then says `failed to parse tokens file` or `tokens file is missing`.
 
 ## Troubleshooting
 
