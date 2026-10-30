@@ -165,3 +165,33 @@ func TestOwnSaveIsNotReadBackAsAnEdit(t *testing.T) {
 		t.Fatal("an unchanged tokens file replaced the tokens in memory")
 	}
 }
+
+func TestSpellingsOfOnePathShareOneStore(t *testing.T) {
+	dir := t.TempDir()
+	a, err := acquireTokenStore(filepath.Join(dir, "tokens.json"), zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := acquireTokenStore(filepath.Join(dir, ".")+"/./tokens.json", zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseTokenStore(filepath.Join(dir, "tokens.json"))
+	releaseTokenStore(filepath.Join(dir, "tokens.json"))
+	if a != b {
+		t.Fatal("relative and absolute path got separate stores")
+	}
+}
+
+func TestIssueThatCantBeSavedIsUndone(t *testing.T) {
+	s := newLoadedStore(t)
+	kept := s.issue(time.Hour)
+	editTokensFile(t, s, `{"half-edited": `)
+	unsaved := s.issue(time.Hour)
+	if s.isValid(unsaved) {
+		t.Fatal("token that couldn't be saved is valid")
+	}
+	if !s.isValid(kept) {
+		t.Fatal("unreadable file revoked the tokens in memory")
+	}
+}

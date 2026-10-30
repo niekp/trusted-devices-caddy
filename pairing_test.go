@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ func pairingReq(ip, method, path, token string, form url.Values) *http.Request {
 		r = httptest.NewRequest(method, "https://example.com"+path, nil)
 	}
 	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	r.Header.Set("Sec-Fetch-Dest", "document")
 	r.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X)")
 	if token != "" {
 		r.AddCookie(&http.Cookie{Name: "trusted_device", Value: token})
@@ -465,5 +467,116 @@ func TestTurningPairingOnKeepsOldTokensUntouched(t *testing.T) {
 	}
 	if strings.Contains(string(data), "0001-01-01") {
 		t.Fatal("zero times written to the tokens file")
+	}
+}
+
+func TestTokensFileThatCantBeReadDoesNotApproveByItself(t *testing.T) {
+	m := newPairingMiddleware(t)
+	admin := pairFirstDevice(t, m)
+	before, err := os.ReadFile(m.tokens.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.tokens = newTokenStore(m.tokens.path, m.tokens.logger)
+	if err := os.Chmod(m.tokens.path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(m.tokens.path, 0600) })
+	m.tokens.load()
+
+	if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil)); called {
+		t.Fatal("a new device was approved by itself while the tokens file couldn't be read")
+	}
+	if err := os.Chmod(m.tokens.path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(m.tokens.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("the tokens file was overwritten while it couldn't be read")
+	}
+	m.tokens.lastCheck.Store(0)
+	if _, called := serve(t, m, pairingReq(away, http.MethodGet, "/", admin, nil)); !called {
+		t.Fatal("approved device denied once the tokens file was readable again")
+	}
+}
+
+func TestFirstDeviceNotApprovedWhenItCantBeSaved(t *testing.T) {
+	m := newPairingMiddleware(t)
+	m.tokens = newTokenStore(filepath.Join(t.TempDir(), "missing", "tokens.json"), m.tokens.logger)
+	m.tokens.load()
+	if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil)); called {
+		t.Fatal("first device approved although its token couldn't be saved")
+	}
+	if len(m.tokens.tokens) != 0 {
+		t.Fatal("unsaved first device kept in memory")
+	}
+}
+
+func TestApproveThatCantBeSavedKeepsWaiting(t *testing.T) {
+	m := newPairingMiddleware(t)
+	adminToken := pairFirstDevice(t, m)
+	token, code := startPairing(t, m)
+	editTokensFile(t, m.tokens, `{"half-edited": `)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}}))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("approve status = %d, want 409", rec.Code)
+	}
+	if _, ok := m.tokens.pendingFor(token); !ok {
+		t.Fatal("device no longer waiting after an approval that couldn't be saved")
+	}
+	if m.tokens.isPaired(token) {
+		t.Fatal("device approved in memory only")
+	}
+}
+
+func TestDeviceCantRevokeItself(t *testing.T) {
+	m := newPairingMiddleware(t)
+	adminToken := pairFirstDevice(t, m)
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, adminToken, nil))
+	if strings.Contains(rec.Body.String(), "/revoke") {
+		t.Fatal("admin page offers to revoke the current device")
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/revoke", adminToken, url.Values{"id": {deviceID(adminToken)}}))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("revoke status = %d, want 409", rec.Code)
+	}
+	if !m.tokens.isPaired(adminToken) {
+		t.Fatal("the current device revoked itself")
+	}
+}
+
+func TestScriptOnTheSiteCantUseTheAdminPage(t *testing.T) {
+	m := newPairingMiddleware(t)
+	adminToken := pairFirstDevice(t, m)
+	_, code := startPairing(t, m)
+
+	r := pairingReq(home, http.MethodGet, admin, adminToken, nil)
+	r.Header.Set("Sec-Fetch-Mode", "cors")
+	r.Header.Set("Sec-Fetch-Dest", "empty")
+	if rec, _ := serve(t, m, r); rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), code) {
+		t.Fatalf("fetch read the admin page: status %d", rec.Code)
+	}
+
+	r = pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}})
+	r.Header.Set("Sec-Fetch-Mode", "cors")
+	r.Header.Set("Sec-Fetch-Dest", "empty")
+	if rec, _ := serve(t, m, r); rec.Code != http.StatusForbidden {
+		t.Fatalf("fetch post: status %d", rec.Code)
+	}
+	if len(m.tokens.pendingList()) != 1 {
+		t.Fatal("a fetch from the site approved the device")
+	}
+}
+
+func TestCodesUseOnlyTheAlphabet(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		code := newCode()
+		if len(code) != codeLength || strings.Trim(code, codeAlphabet) != "" {
+			t.Fatalf("bad code %q", code)
+		}
 	}
 }

@@ -49,13 +49,19 @@ func deviceID(token string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// unbiasedByteLimit is the largest multiple of the alphabet size below 256.
+const unbiasedByteLimit = 256 / len(codeAlphabet) * len(codeAlphabet)
+
 func newCode() string {
-	b := make([]byte, codeLength)
-	_, _ = rand.Read(b) // never fails, see crypto/rand
-	for i := range b {
-		b[i] = codeAlphabet[int(b[i])%len(codeAlphabet)]
+	code := make([]byte, 0, codeLength)
+	b := make([]byte, 1)
+	for len(code) < codeLength {
+		_, _ = rand.Read(b) // never fails, see crypto/rand
+		if int(b[0]) < unbiasedByteLimit {
+			code = append(code, codeAlphabet[int(b[0])%len(codeAlphabet)])
+		}
 	}
-	return string(b)
+	return string(code)
 }
 
 // isPaired reports whether token was approved through pairing and has not expired.
@@ -89,6 +95,7 @@ func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, 
 	})
 	if err != nil {
 		s.logger.Error("failed to save token", zap.Error(err))
+		return "", false
 	}
 	return token, added
 }
@@ -150,17 +157,16 @@ func (s *tokenStore) pendingList() []pendingDevice {
 	return list
 }
 
-// approve turns the waiting device with code into an approved one.
+// approve turns the waiting device with code into an approved one; it keeps waiting when that can't be saved.
 func (s *tokenStore) approve(code, name string, maxAge time.Duration) bool {
-	found := false
+	approved := ""
 	err := s.update(func() bool {
 		now := time.Now()
 		s.prunePendingLocked(now)
 		for token, p := range s.pending {
 			if p.Code == code {
-				delete(s.pending, token)
 				s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Created: now, LastSeen: now}
-				found = true
+				approved = token
 				return true
 			}
 		}
@@ -168,8 +174,15 @@ func (s *tokenStore) approve(code, name string, maxAge time.Duration) bool {
 	})
 	if err != nil {
 		s.logger.Error("failed to save token", zap.Error(err))
+		return false
 	}
-	return found
+	if approved == "" {
+		return false
+	}
+	s.mu.Lock()
+	delete(s.pending, approved)
+	s.mu.Unlock()
+	return true
 }
 
 // reject drops the waiting device with code.
@@ -185,12 +198,12 @@ func (s *tokenStore) reject(code string) bool {
 	return false
 }
 
-// revoke removes the paired device with id.
-func (s *tokenStore) revoke(id string) bool {
+// revoke removes the paired device with id, unless it's the current device.
+func (s *tokenStore) revoke(id, current string) bool {
 	found := false
 	err := s.update(func() bool {
 		for token, info := range s.tokens {
-			if info.Paired && deviceID(token) == id {
+			if info.Paired && token != current && deviceID(token) == id {
 				delete(s.tokens, token)
 				found = true
 			}
@@ -199,6 +212,7 @@ func (s *tokenStore) revoke(id string) bool {
 	})
 	if err != nil {
 		s.logger.Error("failed to save tokens after revoking", zap.Error(err))
+		return false
 	}
 	return found
 }
@@ -247,6 +261,7 @@ func (s *tokenStore) touch(token string, maxAge time.Duration) bool {
 	})
 	if err != nil {
 		s.logger.Error("failed to save last use", zap.Error(err))
+		return false
 	}
 	return renewed
 }

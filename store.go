@@ -3,6 +3,7 @@ package trusteddevices
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -38,9 +39,11 @@ type tokenStore struct {
 	fileSize int64
 	// lastCheck is when a request last looked at the file, in Unix nanoseconds; read without a lock.
 	lastCheck atomic.Int64
-	// unreadable is set while the file is missing or can't be parsed, which is usually an editor halfway through
-	// saving it. The tokens from before stay valid, and nothing is written until the file can be read again.
+	// unreadable is set while the file is missing or can't be read or parsed, which is usually an editor halfway
+	// through saving it. The tokens from before stay valid, and nothing is written until the file can be read again.
 	unreadable bool
+	// loads counts how often the tokens were replaced by the file's.
+	loads uint64
 
 	// pending holds the devices waiting for approval, by the token their cookie already carries. Kept in memory
 	// only: a restart asks them to pair again.
@@ -49,6 +52,7 @@ type tokenStore struct {
 
 // acquireTokenStore returns the shared store for path, loading it from disk on first use.
 func acquireTokenStore(path string, logger *zap.Logger) (*tokenStore, error) {
+	path = storeKey(path)
 	value, _, err := tokenStores.LoadOrNew(path, func() (caddy.Destructor, error) {
 		store := newTokenStore(path, logger)
 		store.load()
@@ -63,7 +67,15 @@ func acquireTokenStore(path string, logger *zap.Logger) (*tokenStore, error) {
 
 // releaseTokenStore drops one reference; the last release stops the store.
 func releaseTokenStore(path string) {
-	_, _ = tokenStores.Delete(path)
+	_, _ = tokenStores.Delete(storeKey(path))
+}
+
+// storeKey makes two spellings of the same tokens file share one store.
+func storeKey(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
 }
 
 func newTokenStore(path string, logger *zap.Logger) *tokenStore {
@@ -119,7 +131,7 @@ func (s *tokenStore) syncLocked() {
 		return
 	}
 	if err != nil {
-		s.logger.Warn("could not check tokens file", zap.String("file", s.path), zap.Error(err))
+		s.markUnreadableLocked("could not check tokens file", err)
 		return
 	}
 	if s.fileSeen && !s.unreadable && info.ModTime().Equal(s.fileMod) && info.Size() == s.fileSize {
@@ -131,7 +143,7 @@ func (s *tokenStore) syncLocked() {
 
 	data, err := os.ReadFile(s.path)
 	if err != nil {
-		s.logger.Warn("could not load tokens file", zap.String("file", s.path), zap.Error(err))
+		s.markUnreadableLocked("could not load tokens file", err)
 		return
 	}
 	s.fileSeen, s.fileMod, s.fileSize = true, info.ModTime(), info.Size()
@@ -143,37 +155,51 @@ func (s *tokenStore) syncLocked() {
 		return
 	}
 	s.tokens = tokens
+	s.loads++
 	s.unreadable = false
 	s.removeExpired(time.Now())
 	s.logger.Info("loaded trusted tokens", zap.Int("count", len(s.tokens)), zap.String("file", s.path))
 }
 
+// markUnreadableLocked stops saving until the file is readable again; the caller holds s.mu.
+func (s *tokenStore) markUnreadableLocked(message string, err error) {
+	if !s.unreadable {
+		s.logger.Error(message+"; keeping the tokens in memory and not saving until it's readable",
+			zap.String("file", s.path), zap.Error(err))
+	}
+	s.unreadable = true
+}
+
 // update reads changes to the file, lets change modify the tokens, and writes them if it reports a change. Reading,
 // changing and writing happen as one step towards other updates, so a hand edit is only lost if it lands in the
-// moment between marshaling and replacing the file.
+// moment between marshaling and replacing the file. A change that can't be saved is undone.
 func (s *tokenStore) update(change func() bool) error {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 
 	s.mu.Lock()
 	s.syncLocked()
+	before, loads := maps.Clone(s.tokens), s.loads
 	if !change() {
 		s.mu.Unlock()
 		return nil
 	}
-	unreadable := s.unreadable
+	if s.unreadable {
+		s.tokens = before
+		s.mu.Unlock()
+		return fmt.Errorf("tokens file %s is missing or can't be read, not overwriting it", s.path)
+	}
 	data, err := json.MarshalIndent(s.tokens, "", "  ")
 	count := len(s.tokens)
 	s.mu.Unlock()
-	if unreadable {
-		return fmt.Errorf("tokens file %s is missing or can't be parsed, not overwriting it", s.path)
-	}
 	if err != nil {
+		s.rollback(before, loads)
 		return fmt.Errorf("marshaling tokens: %w", err)
 	}
 
 	info, err := s.write(data)
 	if err != nil {
+		s.rollback(before, loads)
 		return err
 	}
 	s.mu.Lock()
@@ -181,6 +207,15 @@ func (s *tokenStore) update(change func() bool) error {
 	s.mu.Unlock()
 	s.logger.Debug("saved tokens to file", zap.String("file", s.path), zap.Int("count", count))
 	return nil
+}
+
+// rollback restores the tokens from before a failed save, unless the file has been read since.
+func (s *tokenStore) rollback(before map[string]tokenInfo, loads uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loads == loads {
+		s.tokens = before
+	}
 }
 
 // isValid reports whether token exists and has not expired.

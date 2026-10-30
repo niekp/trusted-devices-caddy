@@ -116,7 +116,7 @@ func (m *Middleware) Validate() error {
 	if m.maxAge <= 0 {
 		return fmt.Errorf("max_age must be positive")
 	}
-	if !strings.HasPrefix(m.PairingPath, "/") || strings.HasSuffix(m.PairingPath, "/") {
+	if m.Pairing && (!strings.HasPrefix(m.PairingPath, "/") || strings.HasSuffix(m.PairingPath, "/")) {
 		return fmt.Errorf("pairing_path must start with / and not end with one")
 	}
 	return nil

@@ -169,9 +169,9 @@ example.com {
 2. On a device that's already approved, also on the trusted network, open `https://example.com/.trusted-devices`. The new device is listed with its code; give it a name and choose **Approve** (or **Reject**).
 3. The new device's page opens the site within a few seconds, and from then on it works anywhere. Using it extends it, so only a device that's unused for `max_age` expires.
 
-The same page lists the approved devices with when they were last used, and revokes one with **Revoke**.
+The same page lists the approved devices with when they were last used, and revokes one with **Revoke**. A device can't revoke itself, so the last approved device can't be removed from the page.
 
-- **The first device** is approved by itself, as long as there's no valid paired token. So is the first one after replacing the tokens file with `{}`, or after every paired device went unused for `max_age`: do that only when no guest is on the network. Not while the tokens file is missing or can't be parsed, since its tokens may only look absent then.
+- **The first device** is approved by itself, as long as there's no valid paired token. So is the first one after replacing the tokens file with `{}`, or after every paired device went unused for `max_age`: do that only when no guest is on the network. Not while the tokens file is missing or can't be read or parsed, since its tokens may only look absent then.
 - **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.
 - **The code** only tells waiting devices apart; it isn't a secret. What's approved is the cookie the waiting device already has. A code expires after 15 minutes, and at most 20 devices wait at a time. Waiting devices are kept in memory, so a restart asks them to start again.
 - **Every request needs an approved token**, also from a trusted IP. Paths a browser fetches without cookies, such as a web app manifest, or that something outside your devices fetches, such as a calendar feed, need their own `handle` block without `trusted_devices`:
@@ -190,7 +190,8 @@ The same page lists the approved devices with when they were last used, and revo
       }
   }
   ```
-- **Paired tokens** are written as `{"expires": …, "paired": true, "name": …, "created": …, "last_seen": …}`. Only those count where pairing is on. Tokens from before pairing, or from a site without pairing that uses the same tokens file, keep their plain timestamp and keep working there, but not where pairing is on: turning pairing on means pairing each device once (the first by itself).
+- **The pairing page** only works as a page opened in the browser, and only takes a form posted from that page: a script on the site can't read the codes or approve a device with `fetch`. Still, don't turn pairing on for a site that serves HTML from others, such as uploaded files.
+- **Paired tokens** are written as `{"expires": …, "paired": true, "name": …, "created": …, "last_seen": …}`. Only those count where pairing is on. Tokens from before pairing, or from a site without pairing that uses the same tokens file, keep their plain timestamp and keep working there, but not where pairing is on: turning pairing on means pairing each device once (the first by itself). Copy the tokens file before turning pairing on: a version of this plugin from before pairing can't read paired tokens, and going back to it needs that copy.
 
 ## Revoking access
 

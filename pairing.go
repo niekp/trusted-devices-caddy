@@ -29,7 +29,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 			return m.serveAdmin(w, r, token)
 		}
 		if approved {
-			return deny(w, "Managing devices only works from the trusted network.")
+			return deny(w, "Access denied")
 		}
 	}
 	if approved {
@@ -51,7 +51,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	name := deviceName(r.UserAgent())
 	if first, ok := m.tokens.addFirstDevice(name, m.maxAge); ok {
 		m.setCookie(w, r, first)
-		m.logger.Info("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
+		m.logger.Warn("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
 		return next.ServeHTTP(w, r)
 	}
 	newToken, p, err := m.tokens.startPairing(r.UserAgent(), ip)
@@ -88,6 +88,9 @@ func deny(w http.ResponseWriter, message string) error {
 // serveAdmin shows the waiting and approved devices, and handles approving, rejecting and revoking.
 func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token string) error {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if !isPageLoad(r) {
+			return deny(w, "Open this page in the browser")
+		}
 		return m.renderAdmin(w, token)
 	}
 	if r.Method != http.MethodPost {
@@ -95,7 +98,7 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return nil
 	}
-	if !sameOrigin(r) {
+	if !isFormSubmission(r) {
 		return deny(w, "Cross-site request refused")
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
@@ -114,19 +117,22 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 		if runes := []rune(name); len(runes) > 60 {
 			name = string(runes[:60])
 		}
-		if m.tokens.approve(code, name, m.maxAge) {
-			m.logger.Info("device approved", zap.String("code", code), zap.String("name", name))
+		if !m.tokens.approve(code, name, m.maxAge) {
+			return notDone(w, "Not approved: the code has expired, or the tokens file can't be saved (see the log).")
 		}
+		m.logger.Info("device approved", zap.String("code", code), zap.String("name", name))
 	case "/reject":
 		code := strings.ToUpper(strings.TrimSpace(r.PostForm.Get("code")))
-		if m.tokens.reject(code) {
-			m.logger.Info("pairing rejected", zap.String("code", code))
+		if !m.tokens.reject(code) {
+			return notDone(w, "Not rejected: the code has already expired.")
 		}
+		m.logger.Info("pairing rejected", zap.String("code", code))
 	case "/revoke":
 		id := r.PostForm.Get("id")
-		if m.tokens.revoke(id) {
-			m.logger.Info("device revoked", zap.String("id", id))
+		if !m.tokens.revoke(id, token) {
+			return notDone(w, "Not revoked: the device is gone, it's this device, or the tokens file can't be saved (see the log).")
 		}
+		m.logger.Info("device revoked", zap.String("id", id))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return nil
@@ -135,11 +141,23 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 	return nil
 }
 
-// sameOrigin refuses form posts from other sites. The cookie is SameSite=Lax, which already keeps it off a
-// cross-site POST; this also covers a sibling subdomain, which counts as the same site.
-func sameOrigin(r *http.Request) bool {
+// notDone answers a form post that changed nothing.
+func notDone(w http.ResponseWriter, message string) error {
+	w.WriteHeader(http.StatusConflict)
+	_, _ = w.Write([]byte(message))
+	return nil
+}
+
+// isPageLoad reports whether r opens the page in a browser tab rather than a fetch.
+func isPageLoad(r *http.Request) bool {
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return dest == "" || dest == "document"
+}
+
+// isFormSubmission refuses posts from other sites, sibling subdomains and scripts on the site itself.
+func isFormSubmission(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
-		return site == "same-origin"
+		return site == "same-origin" && r.Header.Get("Sec-Fetch-Mode") == "navigate" && isPageLoad(r)
 	}
 	origin, err := url.Parse(r.Header.Get("Origin"))
 	return err == nil && origin.Host != "" && origin.Host == r.Host
@@ -256,6 +274,6 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 {{range .Devices}}<section>
 <strong>{{if .Name}}{{.Name}}{{else}}Unnamed device{{end}}</strong>{{if .Current}} (this device){{end}}
 <p class="muted">Approved {{date .Created}} · last used {{date .LastSeen}} · expires {{date .Expires}}</p>
-<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke</button></form>
+{{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke</button></form>{{end}}
 </section>{{end}}
 </body></html>`))
