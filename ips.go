@@ -34,7 +34,8 @@ func (l ipList) contains(ip string) bool {
 	if err != nil {
 		return false
 	}
-	addr = addr.Unmap()
+	// A link-local address can come with a zone (fe80::1%en0), which never falls in a prefix.
+	addr = addr.Unmap().WithZone("")
 	for _, prefix := range l {
 		if prefix.Contains(addr) {
 			return true
