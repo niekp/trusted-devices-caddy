@@ -179,10 +179,10 @@ The same page lists the approved devices with when they were last used, and revo
 
 Edit `trusted_tokens.json` while Caddy runs; there's no need to restart or reload:
 
-- **One device**: remove its line. Tokens carry no device name, so if you can't tell which one it is, revoke them all.
+- **One device**: remove its entry. Without pairing, tokens carry no device name, so if you can't tell which one it is, revoke them all. With pairing, each entry has the name it was approved with, and **Revoke** on the pairing page does the same.
 - **All devices**: replace the contents with `{}`, or delete the file.
 
-Caddy checks the file for changes at most once a second and on every new token, so a revoked token stops working within a second and isn't written back. A device on a trusted IP gets a new token on its next page load.
+Caddy checks the file for changes at most once a second and on every new token, so a revoked token stops working within a second and isn't written back. Without pairing, a device on a trusted IP gets a new token on its next page load; with pairing, it has to be approved again.
 
 If the file can't be parsed (a typo while editing), every token is denied and Caddy won't overwrite the file until it's valid JSON again; the log says `failed to parse tokens file`.
 
