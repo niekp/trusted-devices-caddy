@@ -136,7 +136,7 @@ Use snippets to reuse configuration across multiple sites:
 
 ## How It Works
 
-1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
+1. **Trusted IP Access**: Request from trusted IP → allows access; when it's a page load in a browser (`Sec-Fetch-Mode: navigate`, or a GET for HTML from a browser without fetch metadata), it also generates a token and sets the cookie
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
 
