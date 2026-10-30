@@ -6,7 +6,7 @@ Great for web-applications that you want to access outside of your network also.
 
 ## Features
 
-- IP-based access control with file-based configuration
+- IP-based access control with file-based configuration, single addresses or CIDR ranges
 - Automatic token generation and persistent cookie creation
 - Configurable token expiration (default: 1 year)
 - Automatic cleanup of expired tokens on startup and periodically while running
@@ -113,7 +113,7 @@ Use snippets to reuse configuration across multiple sites:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `trusted_ips_file` | Path to file with trusted IP addresses (one per line) | `trusted_ips.txt` |
+| `trusted_ips_file` | Path to file with trusted IP addresses or CIDR ranges (one per line) | `trusted_ips.txt` |
 | `trusted_tokens_file` | Path to JSON file storing tokens (auto-created) | `trusted_tokens.json` |
 | `cookie_name` | Name of the authentication cookie | `trusted_device` |
 | `max_age` | Token validity duration | `8760h` (1 year) |
@@ -122,11 +122,15 @@ Use snippets to reuse configuration across multiple sites:
 
 **trusted_ips.txt**:
 ```
-# Home network
+# One device
 192.168.1.100
-# Office
-10.0.0.1
+# A whole network
+10.0.0.0/24
+# IPv6 works too
+2001:db8:1234::/64
 ```
+
+Lines that are neither an address nor a range are skipped with a warning in the log.
 
 **trusted_tokens.json** (auto-managed):
 ```json
@@ -137,7 +141,7 @@ Use snippets to reuse configuration across multiple sites:
 
 ## How It Works
 
-1. **Trusted IP Access**: Request from trusted IP → generates token → sets cookie → allows access
+1. **Trusted IP Access**: Request from trusted IP → allows access; when it's a page load in a browser (`Sec-Fetch-Mode: navigate`, or a GET for HTML from a browser without fetch metadata), it also generates a token and sets the cookie
 2. **Token Validation**: Request with valid cookie → allows access (any IP)
 3. **Denied Access**: No valid cookie and not a trusted IP → 403 Forbidden
 

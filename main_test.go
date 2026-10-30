@@ -46,7 +46,7 @@ func newMiddleware(t *testing.T) *Middleware {
 		TrustedTokensFile: path,
 		CookieName:        "trusted_device",
 		maxAge:            8760 * time.Hour,
-		trustedIPs:        map[string]bool{"192.168.1.100": true},
+		trustedIPs:        mustParseIPList("192.168.1.100"),
 		tokens:            newTokenStore(path, zap.NewNop()),
 		logger:            zap.NewNop(),
 	}
@@ -88,9 +88,11 @@ func TestSpoofedForwardingHeadersDenied(t *testing.T) {
 	}
 }
 
+var navigation = map[string]string{"Sec-Fetch-Mode": "navigate"}
+
 func TestTrustedIPGrantsAccessAndIssuesCookie(t *testing.T) {
 	m := newMiddleware(t)
-	r := newReq("192.168.1.100", nil)
+	r := newReq("192.168.1.100", navigation)
 	rec, called := serve(t, m, r)
 	if !called {
 		t.Fatal("trusted IP was denied")
@@ -162,7 +164,7 @@ func TestUserAgentNoLongerGrantsAccess(t *testing.T) {
 
 func TestEmptyTrustedIPsFailsClosed(t *testing.T) {
 	m := newMiddleware(t)
-	m.trustedIPs = map[string]bool{} // no trusted IPs loaded
+	m.trustedIPs = nil // no trusted IPs loaded
 	r := newReq("192.168.1.100", nil)
 	_, called := serve(t, m, r)
 	if called {
@@ -274,8 +276,8 @@ func TestHandlersOnSameFileShareTokens(t *testing.T) {
 		m.tokens = store
 	}
 
-	recA, _ := serve(t, siteA, newReq("192.168.1.100", nil))
-	recB, _ := serve(t, siteB, newReq("192.168.1.100", nil))
+	recA, _ := serve(t, siteA, newReq("192.168.1.100", navigation))
+	recB, _ := serve(t, siteB, newReq("192.168.1.100", navigation))
 	releaseTokenStore(path)
 	releaseTokenStore(path)
 
@@ -314,5 +316,38 @@ func TestTokensSurviveRestart(t *testing.T) {
 	}
 	if !after.isValid(token) {
 		t.Fatal("token lost after restart")
+	}
+}
+
+func TestTrustedIPIssuesCookieOnlyOnNavigation(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  string
+		headers map[string]string
+		mint    bool
+	}{
+		{"navigation", http.MethodGet, navigation, true},
+		{"manifest fetch", http.MethodGet, map[string]string{"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "manifest"}, false},
+		{"script", http.MethodGet, map[string]string{"Sec-Fetch-Mode": "no-cors", "Accept": "text/html"}, false},
+		{"old browser page load", http.MethodGet, map[string]string{"Accept": "text/html,application/xhtml+xml"}, true},
+		{"old browser post", http.MethodPost, map[string]string{"Accept": "text/html"}, false},
+		{"curl", http.MethodGet, map[string]string{"Accept": "*/*"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMiddleware(t)
+			r := newReq("192.168.1.100", tc.headers)
+			r.Method = tc.method
+			rec, called := serve(t, m, r)
+			if !called {
+				t.Fatal("trusted IP was denied")
+			}
+			if minted := len(rec.Result().Cookies()) == 1; minted != tc.mint {
+				t.Fatalf("cookie issued = %v, want %v", minted, tc.mint)
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.mint]; len(m.tokens.tokens) != want {
+				t.Fatalf("stored %d tokens, want %d", len(m.tokens.tokens), want)
+			}
+		})
 	}
 }
