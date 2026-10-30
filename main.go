@@ -72,10 +72,10 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	// Load trusted IPs
 	m.trustedIPs = nil
 	if data, err := os.ReadFile(m.TrustedIPsFile); err == nil {
-		var invalid []string
-		m.trustedIPs, invalid = parseIPList(string(data))
-		for _, line := range invalid {
-			m.logger.Warn("ignoring invalid trusted IP", zap.String("line", line), zap.String("file", m.TrustedIPsFile))
+		var warnings []string
+		m.trustedIPs, warnings = parseIPList(string(data))
+		for _, warning := range warnings {
+			m.logger.Warn("check the trusted IPs file", zap.String("problem", warning), zap.String("file", m.TrustedIPsFile))
 		}
 		m.logger.Info("loaded trusted IPs", zap.Int("count", len(m.trustedIPs)), zap.String("file", m.TrustedIPsFile))
 	} else {
