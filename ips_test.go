@@ -64,3 +64,10 @@ func TestTrustedRangeGrantsAccess(t *testing.T) {
 		t.Fatal("address outside the trusted range was allowed")
 	}
 }
+
+func TestLinkLocalWithZoneMatchesRange(t *testing.T) {
+	list := mustParseIPList("fe80::/10")
+	if !list.contains("fe80::1%en0") {
+		t.Fatal("link-local address with a zone not matched")
+	}
+}
