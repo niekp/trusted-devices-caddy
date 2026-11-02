@@ -257,19 +257,22 @@ func TestAdminPageShowsSiteOfDevices(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "on other.example.com") {
 		t.Fatal("waiting device listed without its site")
 	}
-	serve(t, m, pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}, "name": {"Phone"}}))
+	serve(t, m, pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}, "name": {"Acc tablet"}}))
 	sites := map[string]string{}
 	for _, d := range m.tokens.devices("") {
 		sites[d.Name] = d.Site
 	}
-	if sites["Phone"] != "other.example.com" || sites["iPhone"] != "example.com" {
+	if sites["Acc tablet"] != "other.example.com" || sites["iPhone"] != "example.com" {
 		t.Fatalf("devices not stored with the site they paired on: %v", sites)
 	}
 	rec, _ = serve(t, m, pairingReq(home, http.MethodGet, admin, adminToken, nil))
 	body := rec.Body.String()
 	here, other := strings.Index(body, "<h3>example.com</h3>"), strings.Index(body, "<h3>other.example.com</h3>")
-	if here < 0 || other < here || !strings.Contains(body[other:], "Phone") {
+	if here < 0 || other < here || !strings.Contains(body[other:], "Acc tablet") {
 		t.Fatalf("approved devices not grouped by site, this site first:\n%s", body)
+	}
+	if !strings.Contains(body, `Revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) {
+		t.Fatal("revoke button doesn't name the device and site it revokes")
 	}
 }
 

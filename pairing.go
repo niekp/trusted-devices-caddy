@@ -272,6 +272,7 @@ form { display: inline; }
 input { font: inherit; padding: .25rem .5rem; }
 button { font: inherit; padding: .25rem .75rem; cursor: pointer; }
 .muted { opacity: .7; font-size: .9em; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>`
 
 var funcs = template.FuncMap{
@@ -307,10 +308,10 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <form method="post" action="{{$.Path}}/reject"><input type="hidden" name="code" value="{{.Code}}"><button>Reject</button></form>
 </section>{{else}}<p class="muted">No device is waiting. Open the site on a new device on the trusted network to get a code; reload this page to see it.</p>{{end}}
 <h2>Approved devices</h2>
-{{range .Sites}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
-{{range .Devices}}<section>
-<strong>{{if .Name}}{{.Name}}{{else}}Unnamed device{{end}}</strong>{{if .Current}} (this device){{end}}
+{{range .Sites}}{{$site := or .Site "unknown site"}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
+{{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
+<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
-{{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke</button></form>{{end}}
+{{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))
