@@ -1,11 +1,13 @@
 package trusteddevices
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,12 +51,12 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	}
 
 	name := deviceName(r.UserAgent())
-	if first, ok := m.tokens.addFirstDevice(name, m.maxAge); ok {
+	if first, ok := m.tokens.addFirstDevice(name, r.Host, m.maxAge); ok {
 		m.setCookie(w, r, first)
 		m.logger.Warn("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
 		return next.ServeHTTP(w, r)
 	}
-	newToken, p, err := m.tokens.startPairing(r.UserAgent(), ip)
+	newToken, p, err := m.tokens.startPairing(r.UserAgent(), ip, r.Host)
 	if errors.Is(err, errTooManyPending) {
 		m.logger.Warn("pairing refused", zap.String("ip", ip), zap.Error(err))
 		w.Header().Set("Retry-After", "60")
@@ -91,7 +93,7 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 		if !isPageLoad(r) {
 			return deny(w, "Open this page in the browser")
 		}
-		return m.renderAdmin(w, token)
+		return m.renderAdmin(w, r.Host, token)
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")
@@ -196,7 +198,7 @@ func (m *Middleware) renderWaiting(w http.ResponseWriter, r *http.Request, p pen
 	})
 }
 
-func (m *Middleware) renderAdmin(w http.ResponseWriter, token string) error {
+func (m *Middleware) renderAdmin(w http.ResponseWriter, host, token string) error {
 	pending := m.tokens.pendingList()
 	type waiting struct {
 		pendingDevice
@@ -211,8 +213,42 @@ func (m *Middleware) renderAdmin(w http.ResponseWriter, token string) error {
 	return adminPage.Execute(w, map[string]any{
 		"Path":    m.PairingPath,
 		"Pending": list,
-		"Devices": m.tokens.devices(token),
+		"Sites":   bySite(m.tokens.devices(token), host),
 	})
+}
+
+type siteDevices struct {
+	Site    string
+	Devices []device
+}
+
+// bySite groups devices by the site they were paired on: current first, then by name, and unknown last.
+func bySite(devices []device, current string) []siteDevices {
+	var groups []siteDevices
+	for _, d := range devices {
+		i := slices.IndexFunc(groups, func(g siteDevices) bool { return g.Site == d.Site })
+		if i < 0 {
+			groups = append(groups, siteDevices{Site: d.Site})
+			i = len(groups) - 1
+		}
+		groups[i].Devices = append(groups[i].Devices, d)
+	}
+	rank := func(site string) int {
+		switch site {
+		case current:
+			return 0
+		case "":
+			return 2
+		}
+		return 1
+	}
+	slices.SortFunc(groups, func(a, b siteDevices) int {
+		if c := cmp.Compare(rank(a.Site), rank(b.Site)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Site, b.Site)
+	})
+	return groups
 }
 
 func ago(t time.Time) string {
@@ -262,7 +298,7 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <h2>Waiting for approval</h2>
 {{range .Pending}}<section>
 <p class="code">{{.Code}}</p>
-<p class="muted">{{.UserAgent}}<br>{{.IP}}, {{.Ago}}</p>
+<p class="muted">{{.UserAgent}}<br>{{.IP}} on {{.Site}}, {{.Ago}}</p>
 <form method="post" action="{{$.Path}}/approve">
 <input type="hidden" name="code" value="{{.Code}}">
 <label>Name <input name="name" value="{{.Suggested}}" maxlength="60" required></label>
@@ -271,9 +307,10 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <form method="post" action="{{$.Path}}/reject"><input type="hidden" name="code" value="{{.Code}}"><button>Reject</button></form>
 </section>{{else}}<p class="muted">No device is waiting. Open the site on a new device on the trusted network to get a code; reload this page to see it.</p>{{end}}
 <h2>Approved devices</h2>
+{{range .Sites}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
 {{range .Devices}}<section>
 <strong>{{if .Name}}{{.Name}}{{else}}Unnamed device{{end}}</strong>{{if .Current}} (this device){{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke</button></form>{{end}}
-</section>{{end}}
+</section>{{end}}{{end}}
 </body></html>`))

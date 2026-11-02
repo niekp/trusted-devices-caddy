@@ -30,6 +30,7 @@ type pendingDevice struct {
 	Code      string
 	UserAgent string
 	IP        string
+	Site      string
 	Created   time.Time
 }
 
@@ -37,6 +38,7 @@ type pendingDevice struct {
 type device struct {
 	ID       string
 	Name     string
+	Site     string
 	Created  time.Time
 	LastSeen time.Time
 	Expires  time.Time
@@ -76,7 +78,7 @@ func (s *tokenStore) isPaired(token string) bool {
 // addFirstDevice approves a device right away when no paired token is valid yet, so the first device can approve
 // the others. Checking and adding happen in one step, so two devices at once can't both become the first. It
 // refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then.
-func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, bool) {
+func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (string, bool) {
 	token := uuid.New().String()
 	added := false
 	err := s.update(func() bool {
@@ -89,7 +91,7 @@ func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, 
 				return false
 			}
 		}
-		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Created: now, LastSeen: now}
+		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now}
 		added = true
 		return true
 	})
@@ -101,7 +103,7 @@ func (s *tokenStore) addFirstDevice(name string, maxAge time.Duration) (string, 
 }
 
 // startPairing creates a token that's not valid yet, and the code an admin approves it with.
-func (s *tokenStore) startPairing(userAgent, ip string) (string, pendingDevice, error) {
+func (s *tokenStore) startPairing(userAgent, ip, site string) (string, pendingDevice, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prunePendingLocked(time.Now())
@@ -112,7 +114,7 @@ func (s *tokenStore) startPairing(userAgent, ip string) (string, pendingDevice, 
 	for s.codeTakenLocked(code) {
 		code = newCode()
 	}
-	p := pendingDevice{Code: code, UserAgent: userAgent, IP: ip, Created: time.Now()}
+	p := pendingDevice{Code: code, UserAgent: userAgent, IP: ip, Site: site, Created: time.Now()}
 	token := uuid.New().String()
 	s.pending[token] = p
 	return token, p, nil
@@ -165,7 +167,7 @@ func (s *tokenStore) approve(code, name string, maxAge time.Duration) bool {
 		s.prunePendingLocked(now)
 		for token, p := range s.pending {
 			if p.Code == code {
-				s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Created: now, LastSeen: now}
+				s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Site: p.Site, Created: now, LastSeen: now}
 				approved = token
 				return true
 			}
@@ -227,7 +229,7 @@ func (s *tokenStore) devices(current string) []device {
 	for t, info := range s.tokens {
 		if info.Paired && now.Before(info.Expires) {
 			list = append(list, device{
-				ID: deviceID(t), Name: info.Name, Created: info.Created, LastSeen: info.LastSeen,
+				ID: deviceID(t), Name: info.Name, Site: info.Site, Created: info.Created, LastSeen: info.LastSeen,
 				Expires: info.Expires, Current: t == current,
 			})
 		}

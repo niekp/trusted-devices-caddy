@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -244,6 +245,50 @@ func TestAdminPageEscapesDeviceDetails(t *testing.T) {
 	}
 }
 
+func TestAdminPageShowsSiteOfDevices(t *testing.T) {
+	m := newPairingMiddleware(t)
+	adminToken := pairFirstDevice(t, m)
+	r := pairingReq(home, http.MethodGet, "/", "", nil)
+	r.Host = "other.example.com"
+	rec, _ := serve(t, m, r)
+	code := codeIn(t, rec)
+
+	rec, _ = serve(t, m, pairingReq(home, http.MethodGet, admin, adminToken, nil))
+	if !strings.Contains(rec.Body.String(), "on other.example.com") {
+		t.Fatal("waiting device listed without its site")
+	}
+	serve(t, m, pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}, "name": {"Phone"}}))
+	sites := map[string]string{}
+	for _, d := range m.tokens.devices("") {
+		sites[d.Name] = d.Site
+	}
+	if sites["Phone"] != "other.example.com" || sites["iPhone"] != "example.com" {
+		t.Fatalf("devices not stored with the site they paired on: %v", sites)
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodGet, admin, adminToken, nil))
+	body := rec.Body.String()
+	here, other := strings.Index(body, "<h3>example.com</h3>"), strings.Index(body, "<h3>other.example.com</h3>")
+	if here < 0 || other < here || !strings.Contains(body[other:], "Phone") {
+		t.Fatalf("approved devices not grouped by site, this site first:\n%s", body)
+	}
+}
+
+func TestBySiteOrdersCurrentThenNameThenUnknown(t *testing.T) {
+	devices := []device{{Name: "a", Site: ""}, {Name: "b", Site: "z.example"}, {Name: "c", Site: "here"},
+		{Name: "d", Site: "a.example"}, {Name: "e", Site: "z.example"}}
+	var got []string
+	for _, g := range bySite(devices, "here") {
+		names := ""
+		for _, d := range g.Devices {
+			names += d.Name
+		}
+		got = append(got, g.Site+":"+names)
+	}
+	if want := []string{"here:c", "a.example:d", "z.example:be", ":a"}; !slices.Equal(got, want) {
+		t.Fatalf("groups = %v, want %v", got, want)
+	}
+}
+
 func TestAdminPageDoesNotRevealTokens(t *testing.T) {
 	m := newPairingMiddleware(t)
 	adminToken := pairFirstDevice(t, m)
@@ -281,7 +326,7 @@ func TestPendingExpires(t *testing.T) {
 
 func TestTokensFileKeepsOldFormatAndReadsNew(t *testing.T) {
 	s := newLoadedStore(t)
-	named, _ := s.addFirstDevice("Kitchen tablet", time.Hour)
+	named, _ := s.addFirstDevice("Kitchen tablet", "example.com", time.Hour)
 	plain := s.issue(time.Hour)
 
 	data, err := os.ReadFile(s.path)
@@ -298,10 +343,14 @@ func TestTokensFileKeepsOldFormatAndReadsNew(t *testing.T) {
 	if !strings.Contains(string(raw[named]), `"name": "Kitchen tablet"`) {
 		t.Fatalf("named token missing its name: %s", raw[named])
 	}
+	if !strings.Contains(string(raw[named]), `"site": "example.com"`) {
+		t.Fatalf("named token missing its site: %s", raw[named])
+	}
 
 	reloaded := newTokenStore(s.path, s.logger)
 	reloaded.load()
-	if !reloaded.isValid(plain) || !reloaded.isValid(named) || reloaded.tokens[named].Name != "Kitchen tablet" {
+	if !reloaded.isValid(plain) || !reloaded.isValid(named) || reloaded.tokens[named].Name != "Kitchen tablet" ||
+		reloaded.tokens[named].Site != "example.com" {
 		t.Fatal("tokens file didn't read back")
 	}
 }
