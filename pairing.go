@@ -243,7 +243,7 @@ var funcs = template.FuncMap{
 		if t.IsZero() {
 			return "unknown"
 		}
-		return t.Local().Format("2 Jan 2006 15:04")
+		return t.Local().Format("2006-01-02 15:04")
 	},
 }
 
@@ -273,7 +273,7 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <h2>Approved devices</h2>
 {{range .Devices}}<section>
 <strong>{{if .Name}}{{.Name}}{{else}}Unnamed device{{end}}</strong>{{if .Current}} (this device){{end}}
-<p class="muted">Approved {{date .Created}} · last used {{date .LastSeen}} · expires {{date .Expires}}</p>
+<p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke</button></form>{{end}}
 </section>{{end}}
 </body></html>`))
