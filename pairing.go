@@ -344,7 +344,10 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 {{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
 <strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} <span aria-hidden="true">·</span> admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
-{{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if not .Current}}<details><summary>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
+<p>{{$name}} is then out right away, and has to be approved again on the trusted network.</p>
+<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
+</details>{{end}}
 {{if and $.Admins (not .Admin)}}<details><summary>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
 <p>{{$name}} can then approve and revoke every device here, including yours, until an admin removes that again.</p>
 <form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>

@@ -271,7 +271,8 @@ func TestAdminPageShowsSiteOfDevices(t *testing.T) {
 	if here < 0 || other < here || !strings.Contains(body[other:], "Acc tablet") {
 		t.Fatalf("approved devices not grouped by site, this site first:\n%s", body)
 	}
-	if !strings.Contains(body, `Revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) {
+	if !strings.Contains(body, `Yes, revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) ||
+		!strings.Contains(body, `<summary>Revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) {
 		t.Fatal("revoke button doesn't name the device and site it revokes")
 	}
 }
