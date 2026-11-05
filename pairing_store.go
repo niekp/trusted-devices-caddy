@@ -67,30 +67,34 @@ func newCode() string {
 	return string(code)
 }
 
-// isPaired reports whether token was approved through pairing and has not expired.
-func (s *tokenStore) isPaired(token string) bool {
+// paired returns what's kept for token if it was approved through pairing and has not expired.
+func (s *tokenStore) paired(token string) (tokenInfo, bool) {
 	s.refresh()
 	s.mu.RLock()
 	info, exists := s.tokens[token]
 	s.mu.RUnlock()
-	return exists && info.Paired && time.Now().Before(info.Expires)
+	return info, exists && info.Paired && time.Now().Before(info.Expires)
+}
+
+// isPaired reports whether token was approved through pairing and has not expired.
+func (s *tokenStore) isPaired(token string) bool {
+	_, ok := s.paired(token)
+	return ok
 }
 
 // isAdmin reports whether token is paired, not expired, and marked admin.
 func (s *tokenStore) isAdmin(token string) bool {
-	s.refresh()
-	s.mu.RLock()
-	info, exists := s.tokens[token]
-	s.mu.RUnlock()
-	return exists && info.Paired && info.Admin && time.Now().Before(info.Expires)
+	info, ok := s.paired(token)
+	return ok && info.Admin
 }
 
 // makeAdmin marks the paired device with id as admin.
 func (s *tokenStore) makeAdmin(id string) bool {
 	found := false
 	err := s.update(func() bool {
+		now := time.Now()
 		for token, info := range s.tokens {
-			if info.Paired && !info.Admin && deviceID(token) == id {
+			if info.Paired && !info.Admin && now.Before(info.Expires) && deviceID(token) == id {
 				info.Admin = true
 				s.tokens[token] = info
 				found = true
@@ -107,8 +111,10 @@ func (s *tokenStore) makeAdmin(id string) bool {
 
 // addFirstDevice approves a device right away when no paired token is valid yet, so the first device can approve
 // the others. Checking and adding happen in one step, so two devices at once can't both become the first. It
-// refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then.
-func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (string, bool) {
+// refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then. admin marks
+// it admin; only a site with the admins option passes true, so a site without it, sharing the tokens file, can't make
+// someone admin where the option is on.
+func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration, admin bool) (string, bool) {
 	token := uuid.New().String()
 	added := false
 	err := s.update(func() bool {
@@ -121,9 +127,8 @@ func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (st
 				return false
 			}
 		}
-		// The first device is admin, so turning the admins option on later doesn't lock everyone out.
 		s.tokens[token] = tokenInfo{
-			Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now, Admin: true,
+			Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now, Admin: admin,
 		}
 		added = true
 		return true

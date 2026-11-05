@@ -210,11 +210,11 @@ example.com {
 }
 ```
 
-- **The first device** is admin; devices approved on the page aren't. An admin makes another device admin with **Make admin** on the page, or by adding `"admin": true` to its entry in the tokens file, which is picked up without a restart like any edit.
-- **Other devices** get in as before, but the pairing page gives them a 403, also on the trusted network.
+- **The first device** on a site with `admins` is admin; devices approved on the page aren't, and neither is the first device on a site without `admins`. An admin makes another device admin with **Make admin** on the page, or by adding `"admin": true` to its entry in the tokens file, which is picked up without a restart like any edit.
+- **Other devices** get in as before, but the pairing page gives them a 403, also on the trusted network, saying only an admin device can manage devices. The waiting page tells a new device to be approved on an admin device.
 - **An admin still needs the trusted network** to open the page, as every device does with pairing.
-- **The last admin stays**: a device can't revoke itself, and only an admin can revoke, so the page can't remove the last one. Editing the file can, and so can not using an admin device for `max_age`; then mark another device admin in the file.
-- **Turning `admins` on for an existing tokens file**: the first device became admin only with this version, so an older list may have no admin and the page then opens for nobody. Add `"admin": true` to your own device in the file first. There's deliberately no "the first one to open the page becomes admin": on a shared network that could be anyone.
+- **The last admin stays**: a device can't revoke itself, and only an admin can revoke, so the page can't remove the last one. Editing the file can, and so can not using an admin device for `max_age`. The first-device rule doesn't step in then, as long as other devices are still approved: mark another device admin in the file. Every device then gets the 403 above on the pairing page, which is the sign to do so.
+- **Turning `admins` on for an existing tokens file**: only the first device on a site with `admins` becomes admin, so an existing list has no admin and the page then opens for nobody. Add `"admin": true` to your own device in the file first. There's deliberately no "the first one to open the page becomes admin": on a shared network that could be anyone.
 - **One tokens file, several sites**: the flag is in the file, the option is per site. A site without `admins` that uses the same file still lets every approved device on its trusted network manage all of them. Use `admins` on all of them, or give the site its own tokens file.
 - **Going back** to a version without `admins` keeps the devices working, but the flags are dropped the next time that version writes the file.
 

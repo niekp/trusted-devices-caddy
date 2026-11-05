@@ -329,7 +329,7 @@ func TestPendingExpires(t *testing.T) {
 
 func TestTokensFileKeepsOldFormatAndReadsNew(t *testing.T) {
 	s := newLoadedStore(t)
-	named, _ := s.addFirstDevice("Kitchen tablet", "example.com", time.Hour)
+	named, _ := s.addFirstDevice("Kitchen tablet", "example.com", time.Hour, false)
 	plain := s.issue(time.Hour)
 
 	data, err := os.ReadFile(s.path)
@@ -786,5 +786,66 @@ func TestCaddyfileAdminsOption(t *testing.T) {
 	without.Admins = true
 	if err := without.Validate(); err == nil {
 		t.Fatal("admins without pairing accepted")
+	}
+}
+
+// A site without admins that shares the tokens file mustn't make anyone admin where the option is on.
+func TestFirstDeviceOnASiteWithoutAdminsIsNotAdmin(t *testing.T) {
+	without := newPairingMiddleware(t)
+	with := newAdminsMiddleware(t)
+	with.TrustedTokensFile, with.tokens = without.TrustedTokensFile, without.tokens
+
+	first := pairFirstDevice(t, without)
+	if without.tokens.isAdmin(first) {
+		t.Fatal("first device on a site without admins became admin")
+	}
+	if rec, _ := serve(t, without, pairingReq(home, http.MethodGet, admin, first, nil)); rec.Code != http.StatusOK {
+		t.Fatalf("without admins the first device can't manage devices (status %d)", rec.Code)
+	}
+	if rec, _ := serve(t, with, pairingReq(home, http.MethodGet, admin, first, nil)); rec.Code != http.StatusForbidden {
+		t.Fatalf("first device from a site without admins manages a site with admins (status %d)", rec.Code)
+	}
+}
+
+func TestWithAdminsPagesSayAnAdminIsNeeded(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil))
+	if !strings.Contains(rec.Body.String(), "only an admin device") {
+		t.Fatalf("403 for a device that isn't admin doesn't say why: %q", rec.Body.String())
+	}
+	rec, _ = serve(t, m, pairingReq(away, http.MethodGet, admin, other, nil))
+	if strings.Contains(rec.Body.String(), "admin") {
+		t.Fatalf("403 away from home mentions admins: %q", rec.Body.String())
+	}
+
+	rec, _ = serve(t, m, pairingReq(home, http.MethodGet, "/", "", nil))
+	if !strings.Contains(rec.Body.String(), "On an admin device") {
+		t.Fatal("waiting page doesn't say to approve on an admin device")
+	}
+	plain := newPairingMiddleware(t)
+	pairFirstDevice(t, plain)
+	rec, _ = serve(t, plain, pairingReq(home, http.MethodGet, "/", "", nil))
+	if !strings.Contains(rec.Body.String(), "already approved") {
+		t.Fatal("waiting page without admins changed")
+	}
+}
+
+func TestExpiredDeviceCantBeMadeAdmin(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	m.tokens.mu.Lock()
+	info := m.tokens.tokens[other]
+	info.Expires = time.Now().Add(-time.Minute)
+	m.tokens.tokens[other] = info
+	m.tokens.mu.Unlock()
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusConflict || m.tokens.tokens[other].Admin {
+		t.Fatalf("expired device made admin (status %d)", rec.Code)
 	}
 }

@@ -24,10 +24,16 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	if c, err := r.Cookie(m.CookieName); err == nil {
 		token = c.Value
 	}
-	approved := token != "" && m.tokens.isPaired(token)
+	info, approved := tokenInfo{}, false
+	if token != "" {
+		info, approved = m.tokens.paired(token)
+	}
 
 	if r.URL.Path == m.PairingPath || strings.HasPrefix(r.URL.Path, m.PairingPath+"/") {
-		if approved && trusted && (!m.Admins || m.tokens.isAdmin(token)) {
+		if approved && trusted && m.Admins && !info.Admin {
+			return deny(w, "Access denied: only an admin device can manage devices here.")
+		}
+		if approved && trusted {
 			return m.serveAdmin(w, r, token)
 		}
 		if approved {
@@ -51,7 +57,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	}
 
 	name := deviceName(r.UserAgent())
-	if first, ok := m.tokens.addFirstDevice(name, r.Host, m.maxAge); ok {
+	if first, ok := m.tokens.addFirstDevice(name, r.Host, m.maxAge, m.Admins); ok {
 		m.setCookie(w, r, first)
 		m.logger.Warn("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
 		return next.ServeHTTP(w, r)
@@ -202,6 +208,7 @@ func (m *Middleware) renderWaiting(w http.ResponseWriter, r *http.Request, p pen
 	pageHeaders(w)
 	w.WriteHeader(http.StatusForbidden)
 	return waitingPage.Execute(w, map[string]any{
+		"Admins":  m.Admins,
 		"Code":    p.Code,
 		"Address": r.Host + m.PairingPath,
 		"Minutes": int(pendingTTL.Minutes()),
@@ -299,7 +306,7 @@ var waitingPage = template.Must(template.New("waiting").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Waiting for approval</title>
 <meta http-equiv="refresh" content="5">` + pageStyle + `</head><body>
 <h1>This device isn't approved yet</h1>
-<p>On a device that's already approved, on the trusted network, open <strong>{{.Address}}</strong> and approve this code:</p>
+<p>On {{if .Admins}}an admin device{{else}}a device that's already approved{{end}}, on the trusted network, open <strong>{{.Address}}</strong> and approve this code:</p>
 <p class="code">{{.Code}}</p>
 <p class="muted">This page reloads by itself and opens the site once approved. The code expires after {{.Minutes}} minutes.</p>
 </body></html>`))
