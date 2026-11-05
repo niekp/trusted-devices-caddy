@@ -143,16 +143,20 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 			return notDone(w, "Not revoked: the device is gone, it's this device, or the tokens file can't be saved (see the log).")
 		}
 		m.logger.Info("device revoked", zap.String("id", id))
-	case "/make-admin":
+	case "/make-admin", "/remove-admin":
 		if !m.Admins {
 			w.WriteHeader(http.StatusNotFound)
 			return nil
 		}
 		id := r.PostForm.Get("id")
-		if !m.tokens.makeAdmin(id) {
-			return notDone(w, "Not made admin: the device is gone, it's admin already, or the tokens file can't be saved (see the log).")
+		toAdmin := strings.TrimPrefix(r.URL.Path, m.PairingPath) == "/make-admin"
+		if !m.tokens.setAdmin(id, token, toAdmin) {
+			if toAdmin {
+				return notDone(w, "Not made admin: the device is gone, it's admin already, or the tokens file can't be saved (see the log).")
+			}
+			return notDone(w, "Not removed as admin: the device is gone, it's this device, it isn't admin, or the tokens file can't be saved (see the log).")
 		}
-		m.logger.Info("device made admin", zap.String("id", id))
+		m.logger.Info("device admin changed", zap.String("id", id), zap.Bool("admin", toAdmin))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return nil
@@ -342,8 +346,12 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 {{if and $.Admins (not .Admin)}}<details><summary>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
-<p>{{$name}} can then approve and revoke every device here, including yours. To undo it, revoke the device or edit the tokens file.</p>
+<p>{{$name}} can then approve and revoke every device here, including yours, until an admin removes that again.</p>
 <form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
+</details>{{end}}
+{{if and $.Admins .Admin (not .Current)}}<details><summary>Remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
+<p>{{$name}} can then still use the site, but no longer manage devices.</p>
+<form method="post" action="{{$.Path}}/remove-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
 </details>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))

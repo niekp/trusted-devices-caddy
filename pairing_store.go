@@ -88,14 +88,15 @@ func (s *tokenStore) isAdmin(token string) bool {
 	return ok && info.Admin
 }
 
-// makeAdmin marks the paired device with id as admin.
-func (s *tokenStore) makeAdmin(id string) bool {
+// setAdmin makes the paired device with id admin, or not, unless it's the current device: like revoking, that keeps
+// the last admin, since only an admin can change this.
+func (s *tokenStore) setAdmin(id, current string, admin bool) bool {
 	found := false
 	err := s.update(func() bool {
 		now := time.Now()
 		for token, info := range s.tokens {
-			if info.Paired && !info.Admin && now.Before(info.Expires) && deviceID(token) == id {
-				info.Admin = true
+			if info.Paired && info.Admin != admin && now.Before(info.Expires) && token != current && deviceID(token) == id {
+				info.Admin = admin
 				s.tokens[token] = info
 				found = true
 			}
@@ -103,7 +104,7 @@ func (s *tokenStore) makeAdmin(id string) bool {
 		return found
 	})
 	if err != nil {
-		s.logger.Error("failed to save tokens after making an admin", zap.Error(err))
+		s.logger.Error("failed to save tokens after changing an admin", zap.Error(err))
 		return false
 	}
 	return found

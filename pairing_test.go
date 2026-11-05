@@ -851,3 +851,71 @@ func TestExpiredDeviceCantBeMadeAdmin(t *testing.T) {
 		t.Fatalf("expired device made admin (status %d)", rec.Code)
 	}
 }
+
+// makeAdmin has first make other admin through the page.
+func makeAdmin(t *testing.T, m *Middleware, first, other string) {
+	t.Helper()
+	rec, _ := serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusSeeOther || !m.tokens.isAdmin(other) {
+		t.Fatalf("make admin: status %d", rec.Code)
+	}
+}
+
+func TestAdminRemovesAnotherAdmin(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	makeAdmin(t, m, first, other)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
+	if !strings.Contains(rec.Body.String(), "/remove-admin") || !strings.Contains(rec.Body.String(), "Yes, remove admin") {
+		t.Fatal("admin page doesn't offer to remove another admin behind a confirmation")
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/remove-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusSeeOther || m.tokens.isAdmin(other) {
+		t.Fatalf("remove admin: status %d, still admin %v", rec.Code, m.tokens.isAdmin(other))
+	}
+	if !m.tokens.isPaired(other) {
+		t.Fatal("removing admin revoked the device")
+	}
+	if rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil)); rec.Code != http.StatusForbidden {
+		t.Fatalf("former admin still opens the admin page (status %d)", rec.Code)
+	}
+	if raw := readTokensFile(t, m.tokens.path); raw[other].Admin {
+		t.Fatal("removed admin still admin in the tokens file")
+	}
+}
+
+func TestAdminCantRemoveItself(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	makeAdmin(t, m, first, other)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
+	body := rec.Body.String()
+	if strings.Count(body, "/remove-admin") != 1 {
+		t.Fatalf("admin page offers to remove the current device as admin, or no one: %d", strings.Count(body, "/remove-admin"))
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/remove-admin", first, url.Values{"id": {deviceID(first)}}))
+	if rec.Code != http.StatusConflict || !m.tokens.isAdmin(first) {
+		t.Fatalf("admin removed itself (status %d)", rec.Code)
+	}
+}
+
+func TestOnlyAnAdminRemovesAdmins(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	rec, _ := serve(t, m, pairingReq(home, http.MethodPost, admin+"/remove-admin", other, url.Values{"id": {deviceID(first)}}))
+	if rec.Code != http.StatusForbidden || !m.tokens.isAdmin(first) {
+		t.Fatalf("a device that isn't admin removed an admin (status %d)", rec.Code)
+	}
+
+	plain := newPairingMiddleware(t)
+	plainFirst := pairFirstDevice(t, plain)
+	rec, _ = serve(t, plain, pairingReq(home, http.MethodPost, admin+"/remove-admin", plainFirst, url.Values{"id": {deviceID(plainFirst)}}))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("remove admin while the option is off: status %d", rec.Code)
+	}
+}
