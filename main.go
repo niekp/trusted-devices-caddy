@@ -35,6 +35,8 @@ type Middleware struct {
 	// Pairing makes a new device on a trusted IP wait for approval on an approved device, instead of trusting it.
 	Pairing     bool   `json:"pairing,omitempty"`
 	PairingPath string `json:"pairing_path,omitempty"`
+	// Admins limits managing devices to the ones marked admin, instead of every approved device on a trusted IP.
+	Admins bool `json:"admins,omitempty"`
 
 	trustedIPs ipList
 	tokens     *tokenStore
@@ -118,6 +120,9 @@ func (m *Middleware) Validate() error {
 	}
 	if m.Pairing && (!strings.HasPrefix(m.PairingPath, "/") || strings.HasSuffix(m.PairingPath, "/")) {
 		return fmt.Errorf("pairing_path must start with / and not end with one")
+	}
+	if m.Admins && !m.Pairing {
+		return fmt.Errorf("admins needs pairing")
 	}
 	return nil
 }
@@ -204,6 +209,11 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if !d.Args(&m.PairingPath) {
 					return d.ArgErr()
 				}
+			case "admins":
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Admins = true
 			default:
 				return d.Errf("unrecognized subdirective '%s'", d.Val())
 			}

@@ -632,3 +632,159 @@ func TestCodesUseOnlyTheAlphabet(t *testing.T) {
 		}
 	}
 }
+
+func newAdminsMiddleware(t *testing.T) *Middleware {
+	t.Helper()
+	m := newPairingMiddleware(t)
+	m.Admins = true
+	return m
+}
+
+// approveDevice pairs a new device at home with adminToken, and returns its token.
+func approveDevice(t *testing.T, m *Middleware, adminToken string) string {
+	t.Helper()
+	token, code := startPairing(t, m)
+	serve(t, m, pairingReq(home, http.MethodPost, admin+"/approve", adminToken, url.Values{"code": {code}, "name": {"Dad's phone"}}))
+	if !m.tokens.isPaired(token) {
+		t.Fatal("device not approved")
+	}
+	return token
+}
+
+func TestFirstDeviceIsAdmin(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	if !m.tokens.isAdmin(first) || m.tokens.isAdmin(other) {
+		t.Fatalf("admin: first = %v, other = %v", m.tokens.isAdmin(first), m.tokens.isAdmin(other))
+	}
+	if raw := readTokensFile(t, m.tokens.path); !raw[first].Admin || raw[other].Admin {
+		t.Fatal("admin flag not written to the tokens file")
+	}
+}
+
+func TestWithAdminsOnlyAnAdminManagesDevices(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	// The device gets in, also from home, but not to the admin page.
+	if _, called := serve(t, m, pairingReq(home, http.MethodGet, "/", other, nil)); !called {
+		t.Fatal("approved device denied")
+	}
+	rec, called := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil))
+	if called || rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "Trusted devices") {
+		t.Fatalf("admin page shown to a device that isn't admin (status %d)", rec.Code)
+	}
+
+	_, code := startPairing(t, m)
+	for _, post := range []struct {
+		path string
+		form url.Values
+	}{
+		{"/approve", url.Values{"code": {code}}},
+		{"/reject", url.Values{"code": {code}}},
+		{"/revoke", url.Values{"id": {deviceID(first)}}},
+		{"/make-admin", url.Values{"id": {deviceID(other)}}},
+	} {
+		rec, _ := serve(t, m, pairingReq(home, http.MethodPost, admin+post.path, other, post.form))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s by a device that isn't admin: status %d", post.path, rec.Code)
+		}
+	}
+	if len(m.tokens.pendingList()) != 1 || !m.tokens.isPaired(first) || m.tokens.isAdmin(other) {
+		t.Fatal("a device that isn't admin changed something")
+	}
+
+	rec, _ = serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), code) {
+		t.Fatalf("admin can't see the waiting code (status %d)", rec.Code)
+	}
+}
+
+func TestAdminMakesAnotherAdmin(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
+	if !strings.Contains(rec.Body.String(), "/make-admin") {
+		t.Fatal("admin page doesn't offer to make a device admin")
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusSeeOther || !m.tokens.isAdmin(other) {
+		t.Fatalf("make admin: status %d, admin %v", rec.Code, m.tokens.isAdmin(other))
+	}
+	if rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil)); rec.Code != http.StatusOK {
+		t.Fatalf("new admin can't open the admin page (status %d)", rec.Code)
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("making an admin admin again: status %d, want 409", rec.Code)
+	}
+}
+
+func TestAdminByHandInTokensFile(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	raw := readTokensFile(t, m.tokens.path)
+	info := raw[other]
+	info.Admin = true
+	raw[other] = info
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editTokensFile(t, m.tokens, string(data))
+
+	if rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil)); rec.Code != http.StatusOK {
+		t.Fatalf("device made admin by hand can't open the admin page (status %d)", rec.Code)
+	}
+}
+
+func TestAdminStillOnlyOnTrustedNetwork(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	if rec, called := serve(t, m, pairingReq(away, http.MethodGet, admin, first, nil)); called || rec.Code != http.StatusForbidden {
+		t.Fatalf("admin page shown to an admin away from home (status %d)", rec.Code)
+	}
+}
+
+func TestWithoutAdminsEveryDeviceManages(t *testing.T) {
+	m := newPairingMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+
+	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("without admins a device that isn't admin can't open the admin page (status %d)", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "/make-admin") || strings.Contains(rec.Body.String(), "· admin") {
+		t.Fatal("admin page shows admins while the option is off")
+	}
+	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
+	if rec.Code != http.StatusNotFound || m.tokens.isAdmin(other) {
+		t.Fatalf("make admin while the option is off: status %d", rec.Code)
+	}
+}
+
+func TestCaddyfileAdminsOption(t *testing.T) {
+	var m Middleware
+	if err := m.UnmarshalCaddyfile(caddyfile.NewTestDispenser("trusted_devices {\n pairing\n admins\n}")); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Admins {
+		t.Fatal("admins not set")
+	}
+	if err := (&Middleware{}).UnmarshalCaddyfile(caddyfile.NewTestDispenser("trusted_devices {\n admins yes\n}")); err == nil {
+		t.Fatal("admins with an argument accepted")
+	}
+
+	without := newMiddleware(t)
+	without.Admins = true
+	if err := without.Validate(); err == nil {
+		t.Fatal("admins without pairing accepted")
+	}
+}

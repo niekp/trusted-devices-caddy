@@ -120,6 +120,7 @@ Use snippets to reuse configuration across multiple sites:
 | `max_age` | Token validity duration; with `pairing`, counted from the last use | `8760h` (1 year) |
 | `pairing` | Approve each new device by hand (see [Pairing](#pairing)) | off |
 | `pairing_path` | Where the pairing page lives on each site | `/.trusted-devices` |
+| `admins` | Only devices marked admin manage devices; needs `pairing` (see [Admins](#admins)) | off |
 
 ### File Format
 
@@ -191,7 +192,31 @@ The same page lists the approved devices with when they were last used, grouped 
   }
   ```
 - **The pairing page** only works as a page opened in the browser, and only takes a form posted from that page: a script on the site can't read the codes or approve a device with `fetch`. Still, don't turn pairing on for a site that serves HTML from others, such as uploaded files.
-- **Paired tokens** are written as `{"expires": …, "paired": true, "name": …, "created": …, "last_seen": …}`. Only those count where pairing is on. Tokens from before pairing, or from a site without pairing that uses the same tokens file, keep their plain timestamp and keep working there, but not where pairing is on: turning pairing on means pairing each device once (the first by itself). Copy the tokens file before turning pairing on: a version of this plugin from before pairing can't read paired tokens, and going back to it needs that copy.
+- **Paired tokens** are written as `{"expires": …, "paired": true, "name": …, "created": …, "last_seen": …}`, plus `"admin": true` for an admin (see [Admins](#admins)). Only those count where pairing is on. Tokens from before pairing, or from a site without pairing that uses the same tokens file, keep their plain timestamp and keep working there, but not where pairing is on: turning pairing on means pairing each device once (the first by itself). Copy the tokens file before turning pairing on: a version of this plugin from before pairing can't read paired tokens, and going back to it needs that copy.
+
+### Admins
+
+With pairing, every approved device on the trusted network can approve and revoke devices. That's fine when everyone on the list lives in the house, but not when you approve someone else's device for one site, with their home address in that site's trusted IPs file: they could then manage your devices too. With `admins`, only devices marked admin can:
+
+```caddyfile
+example.com {
+    trusted_devices {
+        trusted_ips_file "/etc/caddy/example_ips.txt"
+        trusted_tokens_file "/var/lib/caddy/example_tokens.json"
+        pairing
+        admins
+    }
+    reverse_proxy localhost:8080
+}
+```
+
+- **The first device** is admin; devices approved on the page aren't. An admin makes another device admin with **Make admin** on the page, or by adding `"admin": true` to its entry in the tokens file, which is picked up without a restart like any edit.
+- **Other devices** get in as before, but the pairing page gives them a 403, also on the trusted network.
+- **An admin still needs the trusted network** to open the page, as every device does with pairing.
+- **The last admin stays**: a device can't revoke itself, and only an admin can revoke, so the page can't remove the last one. Editing the file can, and so can not using an admin device for `max_age`; then mark another device admin in the file.
+- **Turning `admins` on for an existing tokens file**: the first device became admin only with this version, so an older list may have no admin and the page then opens for nobody. Add `"admin": true` to your own device in the file first. There's deliberately no "the first one to open the page becomes admin": on a shared network that could be anyone.
+- **One tokens file, several sites**: the flag is in the file, the option is per site. A site without `admins` that uses the same file still lets every approved device on its trusted network manage all of them. Use `admins` on all of them, or give the site its own tokens file.
+- **Going back** to a version without `admins` keeps the devices working, but the flags are dropped the next time that version writes the file.
 
 ## Revoking access
 

@@ -27,7 +27,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	approved := token != "" && m.tokens.isPaired(token)
 
 	if r.URL.Path == m.PairingPath || strings.HasPrefix(r.URL.Path, m.PairingPath+"/") {
-		if approved && trusted {
+		if approved && trusted && (!m.Admins || m.tokens.isAdmin(token)) {
 			return m.serveAdmin(w, r, token)
 		}
 		if approved {
@@ -135,6 +135,16 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 			return notDone(w, "Not revoked: the device is gone, it's this device, or the tokens file can't be saved (see the log).")
 		}
 		m.logger.Info("device revoked", zap.String("id", id))
+	case "/make-admin":
+		if !m.Admins {
+			w.WriteHeader(http.StatusNotFound)
+			return nil
+		}
+		id := r.PostForm.Get("id")
+		if !m.tokens.makeAdmin(id) {
+			return notDone(w, "Not made admin: the device is gone, it's admin already, or the tokens file can't be saved (see the log).")
+		}
+		m.logger.Info("device made admin", zap.String("id", id))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return nil
@@ -212,6 +222,7 @@ func (m *Middleware) renderAdmin(w http.ResponseWriter, host, token string) erro
 	pageHeaders(w)
 	return adminPage.Execute(w, map[string]any{
 		"Path":    m.PairingPath,
+		"Admins":  m.Admins,
 		"Pending": list,
 		"Sites":   bySite(m.tokens.devices(token), host),
 	})
@@ -310,8 +321,9 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <h2>Approved devices</h2>
 {{range .Sites}}{{$site := or .Site "unknown site"}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
 {{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
-<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}
+<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} · admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins (not .Admin)}}<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))

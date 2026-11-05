@@ -43,6 +43,7 @@ type device struct {
 	LastSeen time.Time
 	Expires  time.Time
 	Current  bool
+	Admin    bool
 }
 
 // deviceID identifies a token on the admin page without revealing it.
@@ -75,6 +76,35 @@ func (s *tokenStore) isPaired(token string) bool {
 	return exists && info.Paired && time.Now().Before(info.Expires)
 }
 
+// isAdmin reports whether token is paired, not expired, and marked admin.
+func (s *tokenStore) isAdmin(token string) bool {
+	s.refresh()
+	s.mu.RLock()
+	info, exists := s.tokens[token]
+	s.mu.RUnlock()
+	return exists && info.Paired && info.Admin && time.Now().Before(info.Expires)
+}
+
+// makeAdmin marks the paired device with id as admin.
+func (s *tokenStore) makeAdmin(id string) bool {
+	found := false
+	err := s.update(func() bool {
+		for token, info := range s.tokens {
+			if info.Paired && !info.Admin && deviceID(token) == id {
+				info.Admin = true
+				s.tokens[token] = info
+				found = true
+			}
+		}
+		return found
+	})
+	if err != nil {
+		s.logger.Error("failed to save tokens after making an admin", zap.Error(err))
+		return false
+	}
+	return found
+}
+
 // addFirstDevice approves a device right away when no paired token is valid yet, so the first device can approve
 // the others. Checking and adding happen in one step, so two devices at once can't both become the first. It
 // refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then.
@@ -91,7 +121,10 @@ func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (st
 				return false
 			}
 		}
-		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now}
+		// The first device is admin, so turning the admins option on later doesn't lock everyone out.
+		s.tokens[token] = tokenInfo{
+			Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now, Admin: true,
+		}
 		added = true
 		return true
 	})
@@ -230,7 +263,7 @@ func (s *tokenStore) devices(current string) []device {
 		if info.Paired && now.Before(info.Expires) {
 			list = append(list, device{
 				ID: deviceID(t), Name: info.Name, Site: info.Site, Created: info.Created, LastSeen: info.LastSeen,
-				Expires: info.Expires, Current: t == current,
+				Expires: info.Expires, Current: t == current, Admin: info.Admin,
 			})
 		}
 	}
