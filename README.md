@@ -170,7 +170,7 @@ example.com {
 2. On a device that's already approved, also on the trusted network, open `https://example.com/.trusted-devices`. The new device is listed with its code; give it a name and choose **Approve** (or **Reject**).
 3. The new device's page opens the site within a few seconds, and from then on it works anywhere. Using it extends it, so only a device that's unused for `max_age` expires.
 
-The same page lists the approved devices with when they were last used, grouped by the site they were paired on, and revokes one with **Revoke**, which asks to confirm first. A device's cookie only works on that site, though every site sharing the tokens file lists it; the site you're on comes first, and devices paired before the site was recorded come last, under *Unknown site*. A device can't revoke itself, so the last approved device can't be removed from the page.
+The same page lists the approved devices with when they were last used, grouped by the site they were paired on, and revokes one with **Revoke**. A device's cookie only works on that site, though every site sharing the tokens file lists it; the site you're on comes first, and devices paired before the site was recorded come last, under *Unknown site*. A device can't revoke itself, so the last approved device can't be removed from the page.
 
 - **The first device** is approved by itself, as long as there's no valid paired token. So is the first one after replacing the tokens file with `{}`, or after every paired device went unused for `max_age`: do that only when no guest is on the network. Not while the tokens file is missing or can't be read or parsed, since its tokens may only look absent then.
 - **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.
@@ -210,7 +210,7 @@ example.com {
 }
 ```
 
-- **The first device** on a site with `admins` is admin; devices approved on the page aren't, and neither is the first device on a site without `admins`. An admin makes another device admin with **Make admin** on the page, and takes that away again with **Remove admin**; both ask to confirm first. In the tokens file the same is `"admin": true` in a device's entry, picked up without a restart like any edit.
+- **The first device** on a site with `admins` is admin; devices approved on the page aren't, and neither is the first device on a site without `admins`. An admin makes another device admin with **Make admin** on the page, and takes that away again with **Remove admin**. In the tokens file the same is `"admin": true` in a device's entry, picked up without a restart like any edit.
 - **Other devices** get in as before, but the pairing page gives them a 403, also on the trusted network, saying only an admin device can manage devices. The waiting page tells a new device to be approved on an admin device.
 - **An admin still needs the trusted network** to open the page, as every device does with pairing.
 - **The last admin stays**: a device can't revoke itself or remove itself as admin, and only an admin can do either, so the page can't remove the last one. Editing the file can, and so can not using an admin device for `max_age`. The first-device rule doesn't step in then, as long as other devices are still approved: mark another device admin in the file. Every device then gets the 403 above on the pairing page, which is the sign to do so.

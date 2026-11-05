@@ -271,8 +271,7 @@ func TestAdminPageShowsSiteOfDevices(t *testing.T) {
 	if here < 0 || other < here || !strings.Contains(body[other:], "Acc tablet") {
 		t.Fatalf("approved devices not grouped by site, this site first:\n%s", body)
 	}
-	if !strings.Contains(body, `Yes, revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) ||
-		!strings.Contains(body, `<summary>Revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) {
+	if !strings.Contains(body, `Revoke<span class="sr-only"> Acc tablet on other.example.com</span>`) {
 		t.Fatal("revoke button doesn't name the device and site it revokes")
 	}
 }
@@ -709,9 +708,8 @@ func TestAdminMakesAnotherAdmin(t *testing.T) {
 	other := approveDevice(t, m, first)
 
 	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
-	if !strings.Contains(rec.Body.String(), "/make-admin") || !strings.Contains(rec.Body.String(), "<details>") ||
-		!strings.Contains(rec.Body.String(), "Yes, make admin") {
-		t.Fatal("admin page doesn't offer to make a device admin behind a confirmation")
+	if !strings.Contains(rec.Body.String(), "/make-admin") {
+		t.Fatal("admin page doesn't offer to make a device admin")
 	}
 	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
 	if rec.Code != http.StatusSeeOther || !m.tokens.isAdmin(other) {
@@ -869,8 +867,8 @@ func TestAdminRemovesAnotherAdmin(t *testing.T) {
 	makeAdmin(t, m, first, other)
 
 	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
-	if !strings.Contains(rec.Body.String(), "/remove-admin") || !strings.Contains(rec.Body.String(), "Yes, remove admin") {
-		t.Fatal("admin page doesn't offer to remove another admin behind a confirmation")
+	if !strings.Contains(rec.Body.String(), "/remove-admin") {
+		t.Fatal("admin page doesn't offer to remove another admin")
 	}
 	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/remove-admin", first, url.Values{"id": {deviceID(other)}}))
 	if rec.Code != http.StatusSeeOther || m.tokens.isAdmin(other) {

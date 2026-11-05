@@ -296,9 +296,6 @@ form { display: inline; }
 input { font: inherit; padding: .25rem .5rem; }
 button { font: inherit; padding: .25rem .75rem; cursor: pointer; }
 .muted { opacity: .7; font-size: .9em; }
-details { margin-top: .75rem; }
-summary { cursor: pointer; width: fit-content; padding: .25rem .75rem; border: 1px solid #8888; border-radius: .25rem; }
-details[open] > summary { margin-bottom: .5rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>`
 
@@ -345,17 +342,8 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 {{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
 <strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} <span aria-hidden="true">·</span> admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
-{{if not .Current}}<details><summary>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
-<p>{{$name}} is then out right away, and has to be approved again on the trusted network.</p>
-<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
-</details>{{end}}
-{{if and $.Admins (not .Admin)}}<details><summary>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
-<p>{{$name}} can then approve and revoke every device here, including yours, until an admin removes that again.</p>
-<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
-</details>{{end}}
-{{if and $.Admins .Admin (not .Current)}}<details><summary>Remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
-<p>{{$name}} can then still use the site, but no longer manage devices.</p>
-<form method="post" action="{{$.Path}}/remove-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
-</details>{{end}}
+{{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins (not .Admin)}}<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins .Admin (not .Current)}}<form method="post" action="{{$.Path}}/remove-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))
