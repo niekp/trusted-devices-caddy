@@ -210,7 +210,7 @@ example.com {
 }
 ```
 
-- **The first device** on a site with `admins` is admin; devices approved on the page aren't, and neither is the first device on a site without `admins`. An admin makes another device admin with **Make admin** on the page, or by adding `"admin": true` to its entry in the tokens file, which is picked up without a restart like any edit.
+- **The first device** on a site with `admins` is admin; devices approved on the page aren't, and neither is the first device on a site without `admins`. An admin makes another device admin with **Make admin** on the page (it asks to confirm first), or by adding `"admin": true` to its entry in the tokens file, which is picked up without a restart like any edit.
 - **Other devices** get in as before, but the pairing page gives them a 403, also on the trusted network, saying only an admin device can manage devices. The waiting page tells a new device to be approved on an admin device.
 - **An admin still needs the trusted network** to open the page, as every device does with pairing.
 - **The last admin stays**: a device can't revoke itself, and only an admin can revoke, so the page can't remove the last one. Editing the file can, and so can not using an admin device for `max_age`. The first-device rule doesn't step in then, as long as other devices are still approved: mark another device admin in the file. Every device then gets the 403 above on the pairing page, which is the sign to do so.

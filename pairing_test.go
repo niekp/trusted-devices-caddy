@@ -708,8 +708,9 @@ func TestAdminMakesAnotherAdmin(t *testing.T) {
 	other := approveDevice(t, m, first)
 
 	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, first, nil))
-	if !strings.Contains(rec.Body.String(), "/make-admin") {
-		t.Fatal("admin page doesn't offer to make a device admin")
+	if !strings.Contains(rec.Body.String(), "/make-admin") || !strings.Contains(rec.Body.String(), "<details>") ||
+		!strings.Contains(rec.Body.String(), "Yes, make admin") {
+		t.Fatal("admin page doesn't offer to make a device admin behind a confirmation")
 	}
 	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
 	if rec.Code != http.StatusSeeOther || !m.tokens.isAdmin(other) {
@@ -813,8 +814,9 @@ func TestWithAdminsPagesSayAnAdminIsNeeded(t *testing.T) {
 	other := approveDevice(t, m, first)
 
 	rec, _ := serve(t, m, pairingReq(home, http.MethodGet, admin, other, nil))
-	if !strings.Contains(rec.Body.String(), "only an admin device") {
-		t.Fatalf("403 for a device that isn't admin doesn't say why: %q", rec.Body.String())
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only an admin device") ||
+		!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("403 for a device that isn't admin doesn't say why (status %d): %q", rec.Code, rec.Body.String())
 	}
 	rec, _ = serve(t, m, pairingReq(away, http.MethodGet, admin, other, nil))
 	if strings.Contains(rec.Body.String(), "admin") {

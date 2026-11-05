@@ -31,7 +31,9 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 
 	if r.URL.Path == m.PairingPath || strings.HasPrefix(r.URL.Path, m.PairingPath+"/") {
 		if approved && trusted && m.Admins && !info.Admin {
-			return deny(w, "Access denied: only an admin device can manage devices here.")
+			pageHeaders(w)
+			w.WriteHeader(http.StatusForbidden)
+			return notAdminPage.Execute(w, nil)
 		}
 		if approved && trusted {
 			return m.serveAdmin(w, r, token)
@@ -290,6 +292,8 @@ form { display: inline; }
 input { font: inherit; padding: .25rem .5rem; }
 button { font: inherit; padding: .25rem .75rem; cursor: pointer; }
 .muted { opacity: .7; font-size: .9em; }
+details { margin-top: .75rem; }
+summary { cursor: pointer; width: fit-content; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>`
 
@@ -309,6 +313,12 @@ var waitingPage = template.Must(template.New("waiting").Parse(`<!doctype html>
 <p>On {{if .Admins}}an admin device{{else}}a device that's already approved{{end}}, on the trusted network, open <strong>{{.Address}}</strong> and approve this code:</p>
 <p class="code">{{.Code}}</p>
 <p class="muted">This page reloads by itself and opens the site once approved. The code expires after {{.Minutes}} minutes.</p>
+</body></html>`))
+
+var notAdminPage = template.Must(template.New("not-admin").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Access denied</title>` + pageStyle + `</head><body>
+<h1>Access denied</h1>
+<p>This device is approved and can use the site, but only an admin device can manage devices here.</p>
 </body></html>`))
 
 var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctype html>
@@ -331,6 +341,9 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} · admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
-{{if and $.Admins (not .Admin)}}<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins (not .Admin)}}<details><summary>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>
+<p>{{$name}} can then approve and revoke every device here, including yours. To undo it, revoke the device or edit the tokens file.</p>
+<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Yes, make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>
+</details>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))
