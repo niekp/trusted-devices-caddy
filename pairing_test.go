@@ -762,7 +762,7 @@ func TestWithoutAdminsEveryDeviceManages(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("without admins a device that isn't admin can't open the admin page (status %d)", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), "/make-admin") || strings.Contains(rec.Body.String(), "· admin") {
+	if strings.Contains(rec.Body.String(), "/make-admin") || strings.Contains(rec.Body.String(), "</span> admin") {
 		t.Fatal("admin page shows admins while the option is off")
 	}
 	rec, _ = serve(t, m, pairingReq(home, http.MethodPost, admin+"/make-admin", first, url.Values{"id": {deviceID(other)}}))
@@ -917,5 +917,27 @@ func TestOnlyAnAdminRemovesAdmins(t *testing.T) {
 	rec, _ = serve(t, plain, pairingReq(home, http.MethodPost, admin+"/remove-admin", plainFirst, url.Values{"id": {deviceID(plainFirst)}}))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("remove admin while the option is off: status %d", rec.Code)
+	}
+}
+
+// Two admins removing each other at once: the second change must fail, so one admin is left.
+func TestRemovedAdminCantRemoveTheOther(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	makeAdmin(t, m, first, other)
+
+	// Both pass the admin check on the page, then the store makes the changes one after the other.
+	if !m.tokens.setAdmin(deviceID(other), first, false) {
+		t.Fatal("first removal refused")
+	}
+	if m.tokens.setAdmin(deviceID(first), other, false) {
+		t.Fatal("a device that was just removed as admin removed the last admin")
+	}
+	if !m.tokens.isAdmin(first) {
+		t.Fatal("no admin left")
+	}
+	if m.tokens.setAdmin(deviceID(other), other, true) {
+		t.Fatal("a device that isn't admin made itself admin in the store")
 	}
 }

@@ -342,7 +342,7 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <h2>Approved devices</h2>
 {{range .Sites}}{{$site := or .Site "unknown site"}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
 {{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
-<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} · admin{{end}}
+<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} <span aria-hidden="true">·</span> admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 {{if and $.Admins (not .Admin)}}<details><summary>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></summary>

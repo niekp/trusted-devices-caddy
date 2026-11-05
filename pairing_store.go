@@ -89,11 +89,15 @@ func (s *tokenStore) isAdmin(token string) bool {
 }
 
 // setAdmin makes the paired device with id admin, or not, unless it's the current device: like revoking, that keeps
-// the last admin, since only an admin can change this.
+// the last admin, since only an admin can change this. The current device must still be admin when the change is
+// made, so two admins removing each other at once can't both succeed and leave none.
 func (s *tokenStore) setAdmin(id, current string, admin bool) bool {
 	found := false
 	err := s.update(func() bool {
 		now := time.Now()
+		if actor, ok := s.tokens[current]; !ok || !actor.Paired || !actor.Admin || !now.Before(actor.Expires) {
+			return false
+		}
 		for token, info := range s.tokens {
 			if info.Paired && info.Admin != admin && now.Before(info.Expires) && token != current && deviceID(token) == id {
 				info.Admin = admin
