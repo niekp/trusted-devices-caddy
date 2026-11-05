@@ -43,6 +43,7 @@ type device struct {
 	LastSeen time.Time
 	Expires  time.Time
 	Current  bool
+	Admin    bool
 }
 
 // deviceID identifies a token on the admin page without revealing it.
@@ -66,19 +67,59 @@ func newCode() string {
 	return string(code)
 }
 
-// isPaired reports whether token was approved through pairing and has not expired.
-func (s *tokenStore) isPaired(token string) bool {
+// paired returns what's kept for token if it was approved through pairing and has not expired.
+func (s *tokenStore) paired(token string) (tokenInfo, bool) {
 	s.refresh()
 	s.mu.RLock()
 	info, exists := s.tokens[token]
 	s.mu.RUnlock()
-	return exists && info.Paired && time.Now().Before(info.Expires)
+	return info, exists && info.Paired && time.Now().Before(info.Expires)
+}
+
+// isPaired reports whether token was approved through pairing and has not expired.
+func (s *tokenStore) isPaired(token string) bool {
+	_, ok := s.paired(token)
+	return ok
+}
+
+// isAdmin reports whether token is paired, not expired, and marked admin.
+func (s *tokenStore) isAdmin(token string) bool {
+	info, ok := s.paired(token)
+	return ok && info.Admin
+}
+
+// setAdmin makes the paired device with id admin, or not, unless it's the current device: like revoking, that keeps
+// the last admin, since only an admin can change this. The current device must still be admin when the change is
+// made, so two admins removing each other at once can't both succeed and leave none.
+func (s *tokenStore) setAdmin(id, current string, admin bool) bool {
+	found := false
+	err := s.update(func() bool {
+		now := time.Now()
+		if actor, ok := s.tokens[current]; !ok || !actor.Paired || !actor.Admin || !now.Before(actor.Expires) {
+			return false
+		}
+		for token, info := range s.tokens {
+			if info.Paired && info.Admin != admin && now.Before(info.Expires) && token != current && deviceID(token) == id {
+				info.Admin = admin
+				s.tokens[token] = info
+				found = true
+			}
+		}
+		return found
+	})
+	if err != nil {
+		s.logger.Error("failed to save tokens after changing an admin", zap.Error(err))
+		return false
+	}
+	return found
 }
 
 // addFirstDevice approves a device right away when no paired token is valid yet, so the first device can approve
 // the others. Checking and adding happen in one step, so two devices at once can't both become the first. It
-// refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then.
-func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (string, bool) {
+// refuses while the tokens file is missing or can't be parsed, as its tokens may only look absent then. admin marks
+// it admin; only a site with the admins option passes true, so a site without it, sharing the tokens file, can't make
+// someone admin where the option is on.
+func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration, admin bool) (string, bool) {
 	token := uuid.New().String()
 	added := false
 	err := s.update(func() bool {
@@ -91,7 +132,9 @@ func (s *tokenStore) addFirstDevice(name, site string, maxAge time.Duration) (st
 				return false
 			}
 		}
-		s.tokens[token] = tokenInfo{Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now}
+		s.tokens[token] = tokenInfo{
+			Expires: now.Add(maxAge), Paired: true, Name: name, Site: site, Created: now, LastSeen: now, Admin: admin,
+		}
 		added = true
 		return true
 	})
@@ -200,10 +243,16 @@ func (s *tokenStore) reject(code string) bool {
 	return false
 }
 
-// revoke removes the paired device with id, unless it's the current device.
-func (s *tokenStore) revoke(id, current string) bool {
+// revoke removes the paired device with id, unless it's the current device. The current device must still be
+// approved, and admin when requireAdmin is set, when the change is made, so two devices revoking each other at once
+// can't both succeed.
+func (s *tokenStore) revoke(id, current string, requireAdmin bool) bool {
 	found := false
 	err := s.update(func() bool {
+		actor, ok := s.tokens[current]
+		if !ok || !actor.Paired || !time.Now().Before(actor.Expires) || (requireAdmin && !actor.Admin) {
+			return false
+		}
 		for token, info := range s.tokens {
 			if info.Paired && token != current && deviceID(token) == id {
 				delete(s.tokens, token)
@@ -230,7 +279,7 @@ func (s *tokenStore) devices(current string) []device {
 		if info.Paired && now.Before(info.Expires) {
 			list = append(list, device{
 				ID: deviceID(t), Name: info.Name, Site: info.Site, Created: info.Created, LastSeen: info.LastSeen,
-				Expires: info.Expires, Current: t == current,
+				Expires: info.Expires, Current: t == current, Admin: info.Admin,
 			})
 		}
 	}

@@ -18,6 +18,8 @@ type tokenInfo struct {
 	Site     string
 	Created  time.Time
 	LastSeen time.Time
+	// Admin lets the device manage the others where the admins option is on; elsewhere it means nothing.
+	Admin bool
 }
 
 // pairedJSON is the object form of a paired token.
@@ -28,13 +30,14 @@ type pairedJSON struct {
 	Site     string     `json:"site,omitempty"`
 	Created  *time.Time `json:"created,omitempty"`
 	LastSeen *time.Time `json:"last_seen,omitempty"`
+	Admin    bool       `json:"admin,omitempty"`
 }
 
 func (t tokenInfo) MarshalJSON() ([]byte, error) {
 	if !t.Paired {
 		return json.Marshal(t.Expires)
 	}
-	v := pairedJSON{Expires: t.Expires, Paired: true, Name: t.Name, Site: t.Site}
+	v := pairedJSON{Expires: t.Expires, Paired: true, Name: t.Name, Site: t.Site, Admin: t.Admin}
 	if !t.Created.IsZero() {
 		v.Created = &t.Created
 	}
@@ -53,7 +56,7 @@ func (t *tokenInfo) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	t.Expires, t.Paired, t.Name, t.Site = v.Expires, v.Paired, v.Name, v.Site
+	t.Expires, t.Paired, t.Name, t.Site, t.Admin = v.Expires, v.Paired, v.Name, v.Site, v.Admin
 	if v.Created != nil {
 		t.Created = *v.Created
 	}
