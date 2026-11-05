@@ -243,10 +243,16 @@ func (s *tokenStore) reject(code string) bool {
 	return false
 }
 
-// revoke removes the paired device with id, unless it's the current device.
-func (s *tokenStore) revoke(id, current string) bool {
+// revoke removes the paired device with id, unless it's the current device. The current device must still be
+// approved, and admin when requireAdmin is set, when the change is made, so two devices revoking each other at once
+// can't both succeed.
+func (s *tokenStore) revoke(id, current string, requireAdmin bool) bool {
 	found := false
 	err := s.update(func() bool {
+		actor, ok := s.tokens[current]
+		if !ok || !actor.Paired || !time.Now().Before(actor.Expires) || (requireAdmin && !actor.Admin) {
+			return false
+		}
 		for token, info := range s.tokens {
 			if info.Paired && token != current && deviceID(token) == id {
 				delete(s.tokens, token)

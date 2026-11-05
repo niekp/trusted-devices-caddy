@@ -942,3 +942,23 @@ func TestRemovedAdminCantRemoveTheOther(t *testing.T) {
 		t.Fatal("a device that isn't admin made itself admin in the store")
 	}
 }
+
+// Two admins revoking each other at once: the second must fail, so one admin is left.
+func TestRevokedAdminCantRevokeTheOther(t *testing.T) {
+	m := newAdminsMiddleware(t)
+	first := pairFirstDevice(t, m)
+	other := approveDevice(t, m, first)
+	makeAdmin(t, m, first, other)
+	approveDevice(t, m, first)
+
+	// Both pass the admin check on the page, then the store makes the changes one after the other.
+	if !m.tokens.revoke(deviceID(other), first, true) {
+		t.Fatal("first revoke refused")
+	}
+	if m.tokens.revoke(deviceID(first), other, true) || !m.tokens.isAdmin(first) {
+		t.Fatal("a device that was just revoked revoked the last admin")
+	}
+	if m.tokens.revoke(deviceID(first), approveDevice(t, m, first), true) {
+		t.Fatal("a device that isn't admin revoked an admin in the store")
+	}
+}

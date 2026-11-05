@@ -139,7 +139,7 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 		m.logger.Info("pairing rejected", zap.String("code", code))
 	case "/revoke":
 		id := r.PostForm.Get("id")
-		if !m.tokens.revoke(id, token) {
+		if !m.tokens.revoke(id, token, m.Admins) {
 			return notDone(w, "Not revoked: the device is gone, it's this device, or the tokens file can't be saved (see the log).")
 		}
 		m.logger.Info("device revoked", zap.String("id", id))
@@ -297,7 +297,8 @@ input { font: inherit; padding: .25rem .5rem; }
 button { font: inherit; padding: .25rem .75rem; cursor: pointer; }
 .muted { opacity: .7; font-size: .9em; }
 details { margin-top: .75rem; }
-summary { cursor: pointer; width: fit-content; }
+summary { cursor: pointer; width: fit-content; padding: .25rem .75rem; border: 1px solid #8888; border-radius: .25rem; }
+details[open] > summary { margin-bottom: .5rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>`
 
