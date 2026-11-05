@@ -169,7 +169,7 @@ example.com {
 2. On a device that's already approved, also on the trusted network, open `https://example.com/.trusted-devices`. The new device is listed with its code; give it a name and choose **Approve** (or **Reject**).
 3. The new device's page opens the site within a few seconds, and from then on it works anywhere. Using it extends it, so only a device that's unused for `max_age` expires.
 
-The same page lists the approved devices with when they were last used, and revokes one with **Revoke**. A device can't revoke itself, so the last approved device can't be removed from the page.
+The same page lists the approved devices with when they were last used, grouped by the site they were paired on, and revokes one with **Revoke**. A device's cookie only works on that site, though every site sharing the tokens file lists it; the site you're on comes first, and devices paired before the site was recorded come last, under *Unknown site*. A device can't revoke itself, so the last approved device can't be removed from the page.
 
 - **The first device** is approved by itself, as long as there's no valid paired token. So is the first one after replacing the tokens file with `{}`, or after every paired device went unused for `max_age`: do that only when no guest is on the network. Not while the tokens file is missing or can't be read or parsed, since its tokens may only look absent then.
 - **Away from the trusted network** an unknown device only gets a 403: it can't ask, and the page to approve devices doesn't open there either, not even for an approved device.

@@ -12,8 +12,10 @@ type tokenInfo struct {
 	Expires time.Time
 	// Paired marks a token approved through pairing; only those are valid where pairing is on, so a token another
 	// site handed out for the same tokens file without pairing doesn't get around it.
-	Paired   bool
-	Name     string
+	Paired bool
+	Name   string
+	// Site is the host the device was paired on; its cookie only works there.
+	Site     string
 	Created  time.Time
 	LastSeen time.Time
 }
@@ -23,6 +25,7 @@ type pairedJSON struct {
 	Expires  time.Time  `json:"expires"`
 	Paired   bool       `json:"paired"`
 	Name     string     `json:"name,omitempty"`
+	Site     string     `json:"site,omitempty"`
 	Created  *time.Time `json:"created,omitempty"`
 	LastSeen *time.Time `json:"last_seen,omitempty"`
 }
@@ -31,7 +34,7 @@ func (t tokenInfo) MarshalJSON() ([]byte, error) {
 	if !t.Paired {
 		return json.Marshal(t.Expires)
 	}
-	v := pairedJSON{Expires: t.Expires, Paired: true, Name: t.Name}
+	v := pairedJSON{Expires: t.Expires, Paired: true, Name: t.Name, Site: t.Site}
 	if !t.Created.IsZero() {
 		v.Created = &t.Created
 	}
@@ -50,7 +53,7 @@ func (t *tokenInfo) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	t.Expires, t.Paired, t.Name = v.Expires, v.Paired, v.Name
+	t.Expires, t.Paired, t.Name, t.Site = v.Expires, v.Paired, v.Name, v.Site
 	if v.Created != nil {
 		t.Created = *v.Created
 	}
