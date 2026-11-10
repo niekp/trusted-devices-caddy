@@ -24,9 +24,17 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	if c, err := r.Cookie(m.CookieName); err == nil {
 		token = c.Value
 	}
-	approved := token != "" && m.tokens.isPaired(token)
+	info, approved := tokenInfo{}, false
+	if token != "" {
+		info, approved = m.tokens.paired(token)
+	}
 
 	if r.URL.Path == m.PairingPath || strings.HasPrefix(r.URL.Path, m.PairingPath+"/") {
+		if approved && trusted && m.Admins && !info.Admin {
+			pageHeaders(w)
+			w.WriteHeader(http.StatusForbidden)
+			return notAdminPage.Execute(w, nil)
+		}
 		if approved && trusted {
 			return m.serveAdmin(w, r, token)
 		}
@@ -51,7 +59,7 @@ func (m *Middleware) servePairing(w http.ResponseWriter, r *http.Request, next c
 	}
 
 	name := deviceName(r.UserAgent())
-	if first, ok := m.tokens.addFirstDevice(name, r.Host, m.maxAge); ok {
+	if first, ok := m.tokens.addFirstDevice(name, r.Host, m.maxAge, m.Admins); ok {
 		m.setCookie(w, r, first)
 		m.logger.Warn("approved the first device by itself", zap.String("name", name), zap.String("ip", ip))
 		return next.ServeHTTP(w, r)
@@ -131,10 +139,24 @@ func (m *Middleware) serveAdmin(w http.ResponseWriter, r *http.Request, token st
 		m.logger.Info("pairing rejected", zap.String("code", code))
 	case "/revoke":
 		id := r.PostForm.Get("id")
-		if !m.tokens.revoke(id, token) {
+		if !m.tokens.revoke(id, token, m.Admins) {
 			return notDone(w, "Not revoked: the device is gone, it's this device, or the tokens file can't be saved (see the log).")
 		}
 		m.logger.Info("device revoked", zap.String("id", id))
+	case "/make-admin", "/remove-admin":
+		if !m.Admins {
+			w.WriteHeader(http.StatusNotFound)
+			return nil
+		}
+		id := r.PostForm.Get("id")
+		toAdmin := strings.TrimPrefix(r.URL.Path, m.PairingPath) == "/make-admin"
+		if !m.tokens.setAdmin(id, token, toAdmin) {
+			if toAdmin {
+				return notDone(w, "Not made admin: the device is gone, it's admin already, or the tokens file can't be saved (see the log).")
+			}
+			return notDone(w, "Not removed as admin: the device is gone, it's this device, it isn't admin, or the tokens file can't be saved (see the log).")
+		}
+		m.logger.Info("device admin changed", zap.String("id", id), zap.Bool("admin", toAdmin))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return nil
@@ -192,6 +214,7 @@ func (m *Middleware) renderWaiting(w http.ResponseWriter, r *http.Request, p pen
 	pageHeaders(w)
 	w.WriteHeader(http.StatusForbidden)
 	return waitingPage.Execute(w, map[string]any{
+		"Admins":  m.Admins,
 		"Code":    p.Code,
 		"Address": r.Host + m.PairingPath,
 		"Minutes": int(pendingTTL.Minutes()),
@@ -212,6 +235,7 @@ func (m *Middleware) renderAdmin(w http.ResponseWriter, host, token string) erro
 	pageHeaders(w)
 	return adminPage.Execute(w, map[string]any{
 		"Path":    m.PairingPath,
+		"Admins":  m.Admins,
 		"Pending": list,
 		"Sites":   bySite(m.tokens.devices(token), host),
 	})
@@ -288,9 +312,15 @@ var waitingPage = template.Must(template.New("waiting").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Waiting for approval</title>
 <meta http-equiv="refresh" content="5">` + pageStyle + `</head><body>
 <h1>This device isn't approved yet</h1>
-<p>On a device that's already approved, on the trusted network, open <strong>{{.Address}}</strong> and approve this code:</p>
+<p>On {{if .Admins}}an admin device{{else}}a device that's already approved{{end}}, on the trusted network, open <strong>{{.Address}}</strong> and approve this code:</p>
 <p class="code">{{.Code}}</p>
 <p class="muted">This page reloads by itself and opens the site once approved. The code expires after {{.Minutes}} minutes.</p>
+</body></html>`))
+
+var notAdminPage = template.Must(template.New("not-admin").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Access denied</title>` + pageStyle + `</head><body>
+<h1>Access denied</h1>
+<p>This device is approved and can use the site, but only an admin device can manage devices here.</p>
 </body></html>`))
 
 var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctype html>
@@ -310,8 +340,10 @@ var adminPage = template.Must(template.New("admin").Funcs(funcs).Parse(`<!doctyp
 <h2>Approved devices</h2>
 {{range .Sites}}{{$site := or .Site "unknown site"}}<h3>{{if .Site}}{{.Site}}{{else}}Unknown site{{end}}</h3>
 {{range .Devices}}{{$name := or .Name "Unnamed device"}}<section>
-<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}
+<strong>{{$name}}</strong>{{if .Current}} (this device){{end}}{{if and $.Admins .Admin}} <span aria-hidden="true">·</span> admin{{end}}
 <p class="muted">Approved: {{date .Created}} · Last used: {{date .LastSeen}} · Expires: {{date .Expires}}</p>
 {{if not .Current}}<form method="post" action="{{$.Path}}/revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins (not .Admin)}}<form method="post" action="{{$.Path}}/make-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Make admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
+{{if and $.Admins .Admin (not .Current)}}<form method="post" action="{{$.Path}}/remove-admin"><input type="hidden" name="id" value="{{.ID}}"><button>Remove admin<span class="sr-only"> {{$name}} on {{$site}}</span></button></form>{{end}}
 </section>{{end}}{{end}}
 </body></html>`))
